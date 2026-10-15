@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
+import { encodeTerminalKeyInput } from "@getpaseo/protocol/terminal-key-input";
 import {
   AgentPermissionResponseSchema,
   FetchAgentsRequestMessageSchema,
@@ -275,6 +276,146 @@ export class PaseoAdapter implements Adapter {
       false,
       "Archive a native workspace and stop its agents and terminals. Paseo may remove its managed worktree checkout when no active workspace still references it; the branch remains. Successful archival does not confirm directory removal, which can be skipped or fail independently.",
       (p) => this.connected().archiveWorkspace(p.workspaceId),
+    );
+    define(
+      "paseo.projects.list",
+      z.strictObject({}),
+      true,
+      "List native projects; opening a workspace is not project registration.",
+      () => this.connected().listProjects(),
+    );
+    define(
+      "paseo.projects.add",
+      z.strictObject({ cwd: z.string().min(1) }),
+      false,
+      "Register an existing directory as a native project. Does not clone a repository.",
+      (p) => this.connected().addProject(p.cwd),
+    );
+    const terminalTarget = z.strictObject({
+      terminalId: z.string().min(1).max(256),
+    });
+    define(
+      "paseo.terminals.list",
+      z.strictObject({
+        cwd: z.string().optional(),
+        workspaceId: z.string().optional(),
+      }),
+      true,
+      "List native terminals, optionally scoped to a directory or workspace.",
+      (p) =>
+        this.connected().listTerminals(p.cwd, undefined, {
+          workspaceId: p.workspaceId,
+        }),
+    );
+    define(
+      "paseo.terminals.create",
+      z.strictObject({
+        cwd: z.string().min(1),
+        workspaceId: z.string().optional(),
+        name: z.string().optional(),
+      }),
+      false,
+      "Create a shell terminal without starting an agent. Returns native terminal identity; inspect list after unknown before retrying.",
+      (p) =>
+        this.connected().createTerminal(p.cwd, p.name, undefined, {
+          workspaceId: p.workspaceId,
+        }),
+    );
+    define(
+      "paseo.terminals.run",
+      terminalTarget.extend({ command: z.string().max(48000) }),
+      false,
+      "Submit input as command text followed by Enter to a terminal. Confirms transport submission only; inspect output to determine command completion and exit status.",
+      async (p) => {
+        this.connected().sendTerminalInput(p.terminalId, {
+          type: "input",
+          data: p.command + "\r",
+        });
+        return {
+          terminalId: p.terminalId,
+          confirmation: "transport_submitted",
+        };
+      },
+    );
+    define(
+      "paseo.terminals.send-text",
+      terminalTarget.extend({ text: z.string().min(1).max(48000) }),
+      false,
+      "Submit input as literal text to a terminal without adding Enter. Confirms transport submission only.",
+      async (p) => {
+        this.connected().sendTerminalInput(p.terminalId, {
+          type: "input",
+          data: p.text,
+        });
+        return {
+          terminalId: p.terminalId,
+          confirmation: "transport_submitted",
+        };
+      },
+    );
+    define(
+      "paseo.terminals.send-keys",
+      terminalTarget.extend({
+        keys: z
+          .array(
+            z.strictObject({
+              key: z.string().min(1).max(64),
+              ctrl: z.boolean().optional(),
+              alt: z.boolean().optional(),
+              shift: z.boolean().optional(),
+              meta: z.boolean().optional(),
+            }),
+          )
+          .min(1)
+          .max(64),
+        inputMode: z
+          .strictObject({
+            applicationCursorKeys: z.boolean().default(false),
+            kittyKeyboardFlags: z.number().int().nonnegative().default(0),
+            win32InputMode: z.boolean().default(false),
+          })
+          .optional(),
+      }),
+      false,
+      "Submit input as Paseo key descriptors to a terminal (e.g. {key: 'Enter'}, {key: 'c', ctrl: true}). Uses native encoding in normal mode by default; optional inputMode overrides applicationCursorKeys, kittyKeyboardFlags and win32InputMode without detecting the application's mode. Unsupported keys reject the whole batch before sending. Confirms transport submission only.",
+      async (p) => {
+        const encoded = p.keys.map((key) =>
+          encodeTerminalKeyInput(key, { inputMode: p.inputMode }),
+        );
+        if (encoded.some((data) => !data))
+          throw new Fault("invalid_params", "Unsupported Paseo terminal key");
+        this.connected().sendTerminalInput(p.terminalId, {
+          type: "input",
+          data: encoded.join(""),
+        });
+        return {
+          terminalId: p.terminalId,
+          confirmation: "transport_submitted",
+        };
+      },
+    );
+    define(
+      "paseo.terminals.read",
+      terminalTarget.extend({
+        start: z.number().int().optional(),
+        end: z.number().int().optional(),
+        stripAnsi: z.boolean().default(true),
+      }),
+      true,
+      "Read output from a native terminal. start/end use Paseo capture offsets (negative offsets read recent lines); narrow the range when the result is too large. Output is not durable history or proof of success.",
+      (p) =>
+        this.connected().captureTerminal(p.terminalId, {
+          start: p.start,
+          end: p.end,
+          stripAnsi: p.stripAnsi,
+        }),
+    );
+    define(
+      "paseo.terminals.close",
+      terminalTarget,
+      false,
+      "Kill a native terminal and its running program. Preserve required output before closing.",
+      (p) => this.connected().killTerminal(p.terminalId),
     );
   }
   connected(expected?: DaemonClient) {

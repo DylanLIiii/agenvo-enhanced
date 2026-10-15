@@ -128,6 +128,8 @@ export async function paseoFixture(modernCreation = false) {
         send(socket, type, { requestId: p.requestId, ...payload });
       const agent = agents.get(p.agentId);
       switch (p.type) {
+        case "terminal_input":
+          break;
         case "fetch_agents_request": {
           if (p.subscribe) subs.directory = randomUUID();
           const all = [...agents.values()].filter(
