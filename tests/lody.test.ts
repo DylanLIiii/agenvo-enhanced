@@ -58,7 +58,6 @@ test(
     const sessionId = listed.items[0].id;
     const events: string[] = [];
     adapter.watchEvents((event) => events.push(event.nativeType));
-    await call("lody.sessions.subscribe", { sessionId });
     assert.equal(events.length, 0);
     await call("lody.sessions.send", {
       sessionId,
@@ -290,7 +289,6 @@ test(
       if (event.nativeType === "agenvo.resync_required")
         resyncs.push(event.native);
     });
-    await call("lody.sessions.subscribe", { sessionId: session.id });
     await call("lody.sessions.send", {
       sessionId: session.id,
       text: "Exactly one native input",
@@ -315,7 +313,6 @@ test(
     assert.ok(resyncs.some((r) => r.scope === "workspace"));
     const fresh = (await call("lody.sessions.list")).items[0];
     assert.equal(fresh.id, session.id);
-    await call("lody.sessions.subscribe", { sessionId: fresh.id });
     assert.equal(
       (await call("lody.sessions.history", { sessionId: fresh.id })).items
         .length,

@@ -6,7 +6,11 @@ import { Fault } from "@agenvo/protocol";
 import type { LodyConfig } from "./config.js";
 import { CloudConnection } from "./cloud.js";
 import { LocalConnection } from "./local.js";
-import { sessionEventData, type PermissionHandling } from "./events.js";
+import {
+  isActive,
+  sessionEventData,
+  type PermissionHandling,
+} from "./events.js";
 import type { LodyConnection } from "./connection.js";
 import {
   appendUserTurn,
@@ -136,6 +140,14 @@ export async function bounded<T>(
     clearTimeout(timer!);
   }
 }
+/** Observation outlives the last activity by this long (tests shorten it). */
+export const observation = { graceMs: 30000 };
+type DocEntry = {
+  opened: Promise<OpenSession>;
+  leases: number;
+  observed: boolean;
+  used: number;
+};
 type OpenSession = {
   doc: LoroDoc;
   room: RepoRoomSubscription;
@@ -153,7 +165,9 @@ export class LodyWorkspace {
     return `${this.mode}_${kind}_${this.mode === "cloud" ? "synced" : "received"}`;
   }
   meta!: RepoRoomSubscription;
-  private docs = new Map<string, Promise<OpenSession>>();
+  private docs = new Map<string, DocEntry>();
+  private graces = new Map<string, NodeJS.Timeout>();
+  private sweeper?: NodeJS.Timeout;
   private machines = new Map<
     string,
     Promise<{
@@ -171,7 +185,7 @@ export class LodyWorkspace {
     sessionId: string | undefined,
     native: Record<string, unknown>,
   ) => void;
-  onGap?: (sessionId?: string) => void;
+  onGap?: (sessionId?: string, reason?: string) => void;
   onAvailability?: (available: boolean) => void;
   onDisconnect?: () => void;
   constructor(readonly config: LodyConfig) {
@@ -205,6 +219,17 @@ export class LodyWorkspace {
         return;
       this.publish(event.kind, event.docId.slice(8), { ...event }, true);
     }).unsubscribe;
+    this.sweeper = setInterval(() => {
+      for (const [id, found] of this.docs)
+        if (
+          !found.leases &&
+          !found.observed &&
+          Date.now() - found.used > observation.graceMs
+        )
+          this.drop(id);
+    }, 5000);
+    this.sweeper.unref();
+    void this.observeActive();
   }
   /**
    * Publish one Session event in arrival order with the Session's current
@@ -242,6 +267,8 @@ export class LodyWorkspace {
           permissionHandling: this.permissionHandling(id),
         }),
       );
+      if (watched && type === "doc-metadata" && meta)
+        void this.observe(id, meta);
     });
   }
   private permissionHandling(id: string): PermissionHandling {
@@ -474,7 +501,12 @@ export class LodyWorkspace {
       );
     }
   }
-  async document(id: string) {
+  /**
+   * Open a Session document for reading or observation. Each open document
+   * holds one native room, so at most 128 are open at once. Documents that
+   * nobody leases or observes are evicted, least recently used first.
+   */
+  private async entry(id: string): Promise<DocEntry> {
     const session = await this.get(id);
     if (session.historyBackend && session.historyBackend !== "loro")
       throw new Fault(
@@ -489,68 +521,170 @@ export class LodyWorkspace {
     );
     let found = this.docs.get(id);
     if (!found) {
-      if (this.docs.size >= 128)
+      if (this.docs.size >= 128 && !this.evict())
         throw new Fault(
           "resource_exhausted",
-          "At most 128 Session documents can be open per connector",
+          "At most 128 Session documents can be leased or observed at once per connector",
         );
-      found = (async () => {
-        const { doc } = await this.repo.openPersistedDoc(`session-${id}`);
-        const room = await this.repo.joinDocRoom(`session-${id}`);
-        try {
-          await this.caughtUp(room);
-        } catch (error) {
-          room.unsubscribe();
-          throw error;
-        }
-        const statusOff = room
-          .subscription(this.mode)
-          .onStatusChange((status) => {
-            if (status !== "joined") this.onGap?.(id);
-          });
-        const off = doc.subscribe((event) => {
-          if (event.by === "local") return;
-          const positions = new Set<number>();
-          let structural = false;
-          for (const change of event.events) {
-            if (change.path[0] !== "history") continue;
-            if (typeof change.path[1] === "number")
-              positions.add(change.path[1]);
-            else structural = true;
-          }
-          const count = doc.getList("history").length;
-          if (structural) {
-            if (count > 50) this.onGap?.(id);
-            for (let i = Math.max(0, count - 50); i < count; i++)
-              positions.add(i);
-          }
-          for (const index of positions) {
-            if (index >= count) continue;
-            try {
-              const turn = readTurn(doc, index);
-              this.publish("history.updated", id, { turn }, false, turn.id);
-            } catch {
-              this.onGap?.(id);
-            }
-          }
-          if (this.policies.get(id) === "auto_approve_plain")
-            void this.approvePermissions(id, doc);
-        });
-        return {
-          doc,
-          room,
-          off: () => {
-            off();
-            statusOff();
-          },
-        };
-      })();
-      this.docs.set(id, found);
-      found.catch(() => this.docs.delete(id));
+      const created: DocEntry = {
+        opened: this.openDocument(id),
+        leases: 0,
+        observed: false,
+        used: Date.now(),
+      };
+      found = created;
+      this.docs.set(id, created);
+      created.opened.catch(() => {
+        if (this.docs.get(id) === created) this.docs.delete(id);
+      });
     }
-    const opened = await found;
-    await this.caughtUp(opened.room);
-    return opened;
+    return found;
+  }
+  private evict() {
+    let victim: [string, DocEntry] | undefined;
+    for (const candidate of this.docs)
+      if (
+        !candidate[1].leases &&
+        !candidate[1].observed &&
+        (!victim || candidate[1].used < victim[1].used)
+      )
+        victim = candidate;
+    if (!victim) return false;
+    this.drop(victim[0]);
+    return true;
+  }
+  private drop(id: string) {
+    const found = this.docs.get(id);
+    this.docs.delete(id);
+    void found?.opened.then(
+      (opened) => {
+        opened.off();
+        opened.room.unsubscribe();
+      },
+      () => {},
+    );
+  }
+  /** Lease a document for one operation; it cannot be evicted until released. */
+  async use<T>(
+    id: string,
+    run: (opened: {
+      doc: LoroDoc;
+      room: RepoRoomSubscription;
+    }) => Promise<T> | T,
+  ): Promise<T> {
+    const found = await this.entry(id);
+    found.leases++;
+    try {
+      const opened = await found.opened;
+      await this.caughtUp(opened.room);
+      return await run(opened);
+    } finally {
+      found.leases--;
+      found.used = Date.now();
+    }
+  }
+  /** Ensure the document is open without keeping it. */
+  document(id: string) {
+    return this.use(id, (opened) => opened);
+  }
+  private async openDocument(id: string): Promise<OpenSession> {
+    const { doc } = await this.repo.openPersistedDoc(`session-${id}`);
+    const room = await this.repo.joinDocRoom(`session-${id}`);
+    try {
+      await this.caughtUp(room);
+    } catch (error) {
+      room.unsubscribe();
+      throw error;
+    }
+    const statusOff = room.subscription(this.mode).onStatusChange((status) => {
+      if (status !== "joined") this.onGap?.(id);
+    });
+    const off = doc.subscribe((event) => {
+      if (event.by === "local") return;
+      const positions = new Set<number>();
+      let structural = false;
+      for (const change of event.events) {
+        if (change.path[0] !== "history") continue;
+        if (typeof change.path[1] === "number") positions.add(change.path[1]);
+        else structural = true;
+      }
+      const count = doc.getList("history").length;
+      if (structural) {
+        if (count > 50) this.onGap?.(id);
+        for (let i = Math.max(0, count - 50); i < count; i++) positions.add(i);
+      }
+      for (const index of positions) {
+        if (index >= count) continue;
+        try {
+          const turn = readTurn(doc, index);
+          this.publish("history.updated", id, { turn }, false, turn.id);
+        } catch {
+          this.onGap?.(id);
+        }
+      }
+      if (this.policies.get(id) === "auto_approve_plain")
+        void this.approvePermissions(id, doc);
+    });
+    return {
+      doc,
+      room,
+      off: () => {
+        off();
+        statusOff();
+      },
+    };
+  }
+  /**
+   * Keep the history of Sessions that are doing something open, so their turns
+   * and permission requests produce events without any caller action. Quiet
+   * Sessions are released after a grace period that lets the final turn arrive.
+   */
+  private async observe(id: string, meta: Record<string, any>) {
+    const timer = this.graces.get(id);
+    if (isActive(meta)) {
+      clearTimeout(timer);
+      this.graces.delete(id);
+      const current = this.docs.get(id);
+      if (current?.observed) return;
+      try {
+        const found = await this.entry(id);
+        found.observed = true;
+        await found.opened;
+      } catch (error) {
+        if (error instanceof Fault && error.code === "resource_exhausted")
+          this.onGap?.(id, "observation_capacity");
+      }
+      return;
+    }
+    if (!this.docs.get(id)?.observed || timer) return;
+    const release = () => {
+      this.graces.delete(id);
+      const found = this.docs.get(id);
+      if (!found?.observed) return;
+      void found.opened.then(
+        (opened) => {
+          if (this.closed) return;
+          if (pendingInteractions(opened.doc).length) {
+            this.graces.set(id, setTimeout(release, observation.graceMs));
+            return;
+          }
+          found.observed = false;
+          found.used = Date.now();
+        },
+        () => {},
+      );
+    };
+    this.graces.set(id, setTimeout(release, observation.graceMs));
+  }
+  private async observeActive() {
+    try {
+      for (const session of await this.list()) {
+        if (this.closed) return;
+        if (isActive(session)) await this.observe(session.id, session);
+      }
+    } catch {
+      /* Metadata events open the rest as Sessions change. */
+    }
   }
   async send(input: z.infer<typeof sendInput>, expectedTurnId?: string) {
     const session = await this.get(input.sessionId);
@@ -573,123 +707,124 @@ export class LodyWorkspace {
         "invalid_state",
         "Native agent configuration changed provider",
       );
-    const { doc, room } = await this.document(session.id);
-    await this.quota(doc);
-    const live = await this.live(session);
-    if (live.state === "unknown")
-      throw new Fault(
-        "runtime_unavailable",
-        "Target machine cannot confirm Session availability",
-      );
-    const userTurnId = randomUUID(),
-      timestamp = new Date().toISOString();
-    const { autoApprove, ...selection } = execution;
-    const inputConfig = {
-      ...selection,
-      prompt: input.text,
-      ...(input.modelId ? { modelId: input.modelId } : {}),
-      ...(expectedTurnId ? { _lodyDeliveryKind: "steer" } : {}),
-    };
-    // Automatic approval of plain execution permissions follows this turn's
-    // policy; a Session that moves to an explicit or native-default policy stops.
-    this.policies.set(
-      session.id,
-      autoApprove ? "auto_approve_plain" : "explicit",
-    );
-    try {
-      doc.getMap("session").set("id", session.id);
-      appendUserTurn(doc, {
-        id: userTurnId,
-        userId: this.config.userId,
-        text: input.text,
-        timestamp,
-        inputConfig,
-        steer: !!expectedTurnId,
-      });
-      await this.uploaded(room);
-      if (expectedTurnId) {
-        const result = await this.connection.call(
-          session.machineId,
-          "session/steer",
-          {
-            sessionId: session.id,
-            expectedTurnId,
-            userTurnId,
-            userId: this.config.userId,
-            timestamp,
-            inputConfig,
-          },
+    return this.use(session.id, async ({ doc, room }) => {
+      await this.quota(doc);
+      const live = await this.live(session);
+      if (live.state === "unknown")
+        throw new Fault(
+          "runtime_unavailable",
+          "Target machine cannot confirm Session availability",
         );
-        if (!result?.applied && result?.recoveryOwned === true)
-          // The daemon owns recovery: it requeues the input as a follow-up turn
-          // (for example when the provider cannot steer). It is not lost or rejected.
+      const userTurnId = randomUUID(),
+        timestamp = new Date().toISOString();
+      const { autoApprove, ...selection } = execution;
+      const inputConfig = {
+        ...selection,
+        prompt: input.text,
+        ...(input.modelId ? { modelId: input.modelId } : {}),
+        ...(expectedTurnId ? { _lodyDeliveryKind: "steer" } : {}),
+      };
+      // Automatic approval of plain execution permissions follows this turn's
+      // policy; a Session that moves to an explicit or native-default policy stops.
+      this.policies.set(
+        session.id,
+        autoApprove ? "auto_approve_plain" : "explicit",
+      );
+      try {
+        doc.getMap("session").set("id", session.id);
+        appendUserTurn(doc, {
+          id: userTurnId,
+          userId: this.config.userId,
+          text: input.text,
+          timestamp,
+          inputConfig,
+          steer: !!expectedTurnId,
+        });
+        await this.uploaded(room);
+        if (expectedTurnId) {
+          const result = await this.connection.call(
+            session.machineId,
+            "session/steer",
+            {
+              sessionId: session.id,
+              expectedTurnId,
+              userTurnId,
+              userId: this.config.userId,
+              timestamp,
+              inputConfig,
+            },
+          );
+          if (!result?.applied && result?.recoveryOwned === true)
+            // The daemon owns recovery: it requeues the input as a follow-up turn
+            // (for example when the provider cannot steer). It is not lost or rejected.
+            return {
+              sessionId: session.id,
+              userTurnId,
+              confirmation: "native_steer_requeued",
+              disposition: result.disposition,
+              recoveryOwned: true,
+              native: result,
+            };
+          if (!result?.applied)
+            throw new Fault(
+              "native_steer_not_applied",
+              "Lody did not confirm steer application",
+              "unknown",
+              { sessionId: session.id, userTurnId, native: result },
+            );
+          const history = doc.getList("history");
+          for (let i = history.length - 1; i >= 0; i--) {
+            const row = history.get(i);
+            if (
+              isContainer(row) &&
+              row.kind() === "Map" &&
+              (row as LoroMap).get("id") === userTurnId &&
+              (row as LoroMap).get("status") === "pending_apply"
+            ) {
+              (row as LoroMap).set("status", "processing");
+              (row as LoroMap).set("read", true);
+              doc.commit();
+              break;
+            }
+          }
+          await this.uploaded(room);
           return {
             sessionId: session.id,
             userTurnId,
-            confirmation: "native_steer_requeued",
-            disposition: result.disposition,
-            recoveryOwned: true,
+            confirmation: "native_steer_applied",
             native: result,
           };
-        if (!result?.applied)
-          throw new Fault(
-            "native_steer_not_applied",
-            "Lody did not confirm steer application",
-            "unknown",
-            { sessionId: session.id, userTurnId, native: result },
-          );
-        const history = doc.getList("history");
-        for (let i = history.length - 1; i >= 0; i--) {
-          const row = history.get(i);
-          if (
-            isContainer(row) &&
-            row.kind() === "Map" &&
-            (row as LoroMap).get("id") === userTurnId &&
-            (row as LoroMap).get("status") === "pending_apply"
-          ) {
-            (row as LoroMap).set("status", "processing");
-            (row as LoroMap).set("read", true);
-            doc.commit();
-            break;
-          }
         }
-        await this.uploaded(room);
+        await this.repo.upsertDocMeta(`session-${session.id}`, {
+          latestUserMsgId: userTurnId,
+          lastMissingHistoryUserMsgId: undefined,
+          lastMessageAt: Date.now(),
+        });
+        await this.uploaded(this.meta);
+        // Synchronized history and the activation pointer are the native delivery
+        // path. The optional dispatch RPC accelerator is unnecessary for correctness.
         return {
           sessionId: session.id,
           userTurnId,
-          confirmation: "native_steer_applied",
-          native: result,
+          confirmation: this.confirmation("input"),
         };
+      } catch (error) {
+        if (error instanceof Fault && error.code === "native_steer_not_applied")
+          throw error;
+        throw new Fault(
+          `${this.mode}_send_uncertain`,
+          "Lody input delivery was not fully confirmed; inspect the native turn before retrying",
+          "unknown",
+          {
+            sessionId: session.id,
+            userTurnId,
+            ...(error instanceof Fault
+              ? { cause: error.outcome().error?.code }
+              : {}),
+          },
+        );
       }
-      await this.repo.upsertDocMeta(`session-${session.id}`, {
-        latestUserMsgId: userTurnId,
-        lastMissingHistoryUserMsgId: undefined,
-        lastMessageAt: Date.now(),
-      });
-      await this.uploaded(this.meta);
-      // Synchronized history and the activation pointer are the native delivery
-      // path. The optional dispatch RPC accelerator is unnecessary for correctness.
-      return {
-        sessionId: session.id,
-        userTurnId,
-        confirmation: this.confirmation("input"),
-      };
-    } catch (error) {
-      if (error instanceof Fault && error.code === "native_steer_not_applied")
-        throw error;
-      throw new Fault(
-        `${this.mode}_send_uncertain`,
-        "Lody input delivery was not fully confirmed; inspect the native turn before retrying",
-        "unknown",
-        {
-          sessionId: session.id,
-          userTurnId,
-          ...(error instanceof Fault
-            ? { cause: error.outcome().error?.code }
-            : {}),
-        },
-      );
-    }
+    });
   }
   async live(session: Session) {
     return this.connection.live(session);
@@ -720,28 +855,29 @@ export class LodyWorkspace {
     return { sessionId: id, turnId, interruption: "requested", native };
   }
   async respond(input: z.infer<typeof permissionInput>) {
-    const { doc, room } = await this.document(input.sessionId);
-    writePermission(doc, input.turnId, input.requestId, input.outcome);
-    try {
-      await this.uploaded(room);
-    } catch {
-      throw new Fault(
-        `${this.mode}_response_uncertain`,
-        "Lody interaction response was not confirmed",
-        "unknown",
-        {
-          sessionId: input.sessionId,
-          turnId: input.turnId,
-          requestId: input.requestId,
-        },
-      );
-    }
-    return {
-      sessionId: input.sessionId,
-      requestId: input.requestId,
-      confirmation: this.confirmation("response"),
-      nativeAcknowledged: false,
-    };
+    return this.use(input.sessionId, async ({ doc, room }) => {
+      writePermission(doc, input.turnId, input.requestId, input.outcome);
+      try {
+        await this.uploaded(room);
+      } catch {
+        throw new Fault(
+          `${this.mode}_response_uncertain`,
+          "Lody interaction response was not confirmed",
+          "unknown",
+          {
+            sessionId: input.sessionId,
+            turnId: input.turnId,
+            requestId: input.requestId,
+          },
+        );
+      }
+      return {
+        sessionId: input.sessionId,
+        requestId: input.requestId,
+        confirmation: this.confirmation("response"),
+        nativeAcknowledged: false,
+      };
+    });
   }
   private async approvePermissions(id: string, doc: LoroDoc) {
     for (const request of pendingInteractions(doc)) {
@@ -795,11 +931,10 @@ export class LodyWorkspace {
   async close() {
     this.closed = true;
     this.off?.();
-    for (const entry of this.docs.values()) {
-      const opened = await entry.catch(() => undefined);
-      opened?.off();
-      opened?.room.unsubscribe();
-    }
+    clearInterval(this.sweeper);
+    for (const timer of this.graces.values()) clearTimeout(timer);
+    this.graces.clear();
+    for (const id of [...this.docs.keys()]) this.drop(id);
     await this.connection.close();
   }
 }

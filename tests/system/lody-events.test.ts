@@ -83,7 +83,6 @@ test(
       0,
     );
     await lab.rpc("events/subscribe", lab.subscription(device, "lody"));
-    await call("lody.sessions.subscribe", { sessionId: session.id });
     const sent = await call("lody.sessions.send", {
       sessionId: session.id,
       text: "Reply with the fixture result.",

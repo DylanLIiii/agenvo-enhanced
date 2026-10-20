@@ -175,12 +175,12 @@
 
 两个概念分开：
 
-- **观察（observation）**：由 Connector 根据原生状态决定。元数据始终观察（meta 房间，一个）。历史文档在 Session 活跃时打开：元数据显示 `status` 非 `idle`、`awaitingUserSince` 非空、`processingUserMsgId` 非空，或刚收到 `latestUserMsgId` 变化；回到 `idle` 且没有待处理请求后保留一段宽限期（建议 30 秒，供最后的 `finished` turn 到达）再释放。活跃 Session 的 `history.updated` 与自动批准因此不依赖调用者操作，也不依赖“这个 Session 是否碰巧被读过”。
+- **观察（observation）**：由 Connector 根据原生状态决定。元数据始终观察（meta 房间，一个）。历史文档在 Session 活跃时打开：活跃沿用原生 Lody 的分类，即 `status.type` 为 `running`、`requestPermission`、`initializing`，另加 `awaitingUserSince` 非空或 `processingUserMsgId` 为字符串（`isActive`）。`error`/`stopped` 等状态不算活跃，避免长期停留在这些状态的 Session 永久占用名额；连接建立时扫描一次现有活跃 Session。`latestUserMsgId` 变化不作触发条件：发送本身已持有文档，随后的 `initializing` 状态会接管。回到 `idle` 且没有待处理请求后保留一段宽限期（建议 30 秒，供最后的 `finished` turn 到达）再释放。活跃 Session 的 `history.updated` 与自动批准因此不依赖调用者操作，也不依赖“这个 Session 是否碰巧被读过”。
 - **读取（lease）**：`history`、`turn`、`interactions`、`respond` 借用文档并在空闲一段时间后归还，使用引用计数和 LRU；文档同时被观察和读取时共享同一份。
 
 容量：先驱逐 LRU 的非活跃读取文档；若 128 个全部是活跃观察，新读取返回 `resource_exhausted`，同时发 `agenvo.resync_required`（`observation_capacity`），告诉订阅者有 Session 因容量未被观察，而不是静默漏掉。这是已有语义的收紧，不新增调度机制。
 
-`lody.sessions.subscribe`：该方法随 0.2.0 发布（引入它的提交 [`6d541b7`](https://github.com/DylanLIiii/agenvo-enhanced/commit/6d541b7) 早于 release 0.2.0 的 `a89415e`），属于已发布外部契约，不是“未发布版本别名”。建议删除并在发行说明中标明破坏性变更（待决定 1）。删除后，历史事件的开启条件由观察规则覆盖；空闲 Session 没有新事件，变化时观察规则自然打开。
+`lody.sessions.subscribe`：该方法随 0.2.0 发布（引入它的提交 [`6d541b7`](https://github.com/DylanLIiii/agenvo-enhanced/commit/6d541b7) 早于 release 0.2.0 的 `a89415e`），属于已发布外部契约，不是“未发布版本别名”。已确认删除，并作为破坏性变更记录在发行说明和 [`docs/lody.md`](../docs/lody.md)；迁移方式是删除调用，不需要替代调用。删除后，历史事件的开启条件由观察规则覆盖；空闲 Session 没有新事件，变化时观察规则自然打开。
 
 ### 重连与重同步
 
@@ -247,7 +247,7 @@
 
 ## 待决定
 
-1. **`lody.sessions.subscribe` 的处理。** 它在 0.2.0 已发布。选项：A. 删除并标注破坏性变更（推荐，观察自动化后它没有用途，保留会继续占用名额）；B. 保留为不占名额的“固定观察”提示。
+1. **`lody.sessions.subscribe` 的处理。** 已决定：删除（选项 A），标注破坏性变更。
 2. **是否新增派生事件 `lody.interaction.pending/resolved`。** 推荐新增，因为 Relay 只能按原生类型过滤；替代方案是只用 `doc-metadata`，消费者自己过滤，代价是每次状态变化都唤醒一次。
 3. **身份放在 `native.agenvo` 还是扩展 `runtimeEvent` 顶层。** 推荐前者（不改共享协议，不影响 Herdr/Codex）；后者能让所有 Connector 受益，但改变 Relay 与 SDK 契约。
 4. **是否接受 `lody.sessions.history` 增加 `afterTurnId`**（读取接口增补，阶段 4）。

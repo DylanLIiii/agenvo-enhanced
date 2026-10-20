@@ -50,9 +50,6 @@ test(
       (await cloud.document(createdId)).doc.getList("history").length,
       0,
     );
-    await call("lody.sessions.subscribe", {
-      sessionId: session.id,
-    });
     await call("lody.sessions.send", {
       sessionId: session.id,
       text: "MCP cloud input",

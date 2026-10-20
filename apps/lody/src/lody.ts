@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
+import type { LoroDoc } from "loro-crdt";
 import { bytes, Fault, page, type Outcome } from "@agenvo/protocol";
 import type { RuntimeEvent } from "@agenvo/protocol/events";
 import {
@@ -149,7 +150,7 @@ export class LodyAdapter implements Adapter {
       "lody.sessions.history",
       sessionTarget.extend({ ...pagination }),
       true,
-      "Read output from native history by stable turn identity. Opening history subscribes to document updates; reconnect requires opening again.",
+      "Read output from native history by stable turn identity. Reading does not observe: events for active Sessions arrive through MCP events without any call.",
       (p) => this.history(p.sessionId, p.cursor, p.limit),
     );
     define(
@@ -162,45 +163,35 @@ export class LodyAdapter implements Adapter {
       }),
       true,
       "Read a large native turn as JSON text fragments. Pass the returned hash with subsequent offsets; concurrent edits invalidate the continuation.",
-      async (p) => {
-        const { doc } = await this.connected().document(p.sessionId);
-        const list = doc.getList("history");
-        for (let i = 0; i < list.length; i++) {
-          const turn = readTurn(doc, i);
-          if (turn.id !== p.turnId) continue;
-          const json = JSON.stringify(turn),
-            hash = createHash("sha256").update(json).digest("hex");
-          if (
-            p.offset > json.length ||
-            (p.offset > 0 && p.expectedHash !== hash) ||
-            (p.expectedHash && p.expectedHash !== hash)
-          )
-            throw new Fault(
-              "invalid_cursor",
-              "Native turn changed; restart reading this turn",
-            );
-          const end = Math.min(json.length, p.offset + p.limit);
-          return {
-            sessionId: p.sessionId,
-            turnId: p.turnId,
-            format: "native_turn_json_fragment",
-            hash,
-            text: json.slice(p.offset, end),
-            nextOffset: end < json.length ? end : undefined,
-          };
-        }
-        throw new Fault("not_found");
-      },
-    );
-    define(
-      "lody.sessions.subscribe",
-      sessionTarget,
-      false,
-      "Subscribe to Session document updates on this connection. Initial snapshots are not completion events; reconnect requires subscribing again and reading native history for missed output.",
-      async (p) => {
-        await this.connected().document(p.sessionId);
-        return { sessionId: p.sessionId, subscribed: true };
-      },
+      (p) =>
+        this.connected().use(p.sessionId, ({ doc }) => {
+          const list = doc.getList("history");
+          for (let i = 0; i < list.length; i++) {
+            const turn = readTurn(doc, i);
+            if (turn.id !== p.turnId) continue;
+            const json = JSON.stringify(turn),
+              hash = createHash("sha256").update(json).digest("hex");
+            if (
+              p.offset > json.length ||
+              (p.offset > 0 && p.expectedHash !== hash) ||
+              (p.expectedHash && p.expectedHash !== hash)
+            )
+              throw new Fault(
+                "invalid_cursor",
+                "Native turn changed; restart reading this turn",
+              );
+            const end = Math.min(json.length, p.offset + p.limit);
+            return {
+              sessionId: p.sessionId,
+              turnId: p.turnId,
+              format: "native_turn_json_fragment",
+              hash,
+              text: json.slice(p.offset, end),
+              nextOffset: end < json.length ? end : undefined,
+            };
+          }
+          throw new Fault("not_found");
+        }),
     );
     define(
       "lody.interactions.list",
@@ -263,9 +254,9 @@ export class LodyAdapter implements Adapter {
           }, 1000);
       });
     };
-    workspace.onGap = (sessionId) => {
+    workspace.onGap = (sessionId, reason) => {
       this.emit("agenvo.resync_required", undefined, {
-        reason: `${this.config.mode}_sync_gap`,
+        reason: reason ?? `${this.config.mode}_sync_gap`,
         ...(sessionId
           ? { scope: "session", sessionId }
           : { scope: "workspace" }),
@@ -294,8 +285,12 @@ export class LodyAdapter implements Adapter {
       throw error;
     }
   }
-  async history(id: string, cursor?: string, limit = 20) {
-    const { doc } = await this.connected().document(id);
+  history(id: string, cursor?: string, limit = 20) {
+    return this.connected().use(id, ({ doc }) =>
+      this.page(doc, id, cursor, limit),
+    );
+  }
+  private page(doc: LoroDoc, id: string, cursor?: string, limit = 20) {
     const list = doc.getList("history");
     let start = 0;
     if (cursor) {
@@ -346,9 +341,10 @@ export class LodyAdapter implements Adapter {
           : undefined,
     };
   }
-  async interactions(id: string) {
-    const { doc } = await this.connected().document(id);
-    return pendingInteractions(doc).map(({ position, itemIndex, ...r }) => r);
+  interactions(id: string) {
+    return this.connected().use(id, ({ doc }) =>
+      pendingInteractions(doc).map(({ position, itemIndex, ...r }) => r),
+    );
   }
   methods() {
     return [...this.operations.values()].map(

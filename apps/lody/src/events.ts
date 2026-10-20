@@ -100,3 +100,18 @@ export function sessionEventData(
     agenvo: { ...agenvo, read: { method: "lody.sessions.get", sessionId } },
   };
 }
+
+/**
+ * Native Lody treats running, requestPermission and initializing as active
+ * Session statuses; a pending user question or a processing user turn also
+ * means something is happening that a consumer may need to react to.
+ */
+export function isActive(meta: Record<string, any>) {
+  return (
+    ["running", "requestPermission", "initializing"].includes(
+      meta.status?.type,
+    ) ||
+    (meta.awaitingUserSince ?? null) !== null ||
+    typeof meta.processingUserMsgId === "string"
+  );
+}
