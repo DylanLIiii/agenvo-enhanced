@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Prepares a fresh Orb for Agenvo development. Idempotent; needs no credentials.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+REQUIRED_MAJOR=24
+REQUIRED_MINOR=13
+
+node_ok() {
+  command -v node >/dev/null 2>&1 || return 1
+  local v major minor
+  v=$(node -p 'process.versions.node')
+  major=${v%%.*}; minor=${v#*.}; minor=${minor%%.*}
+  [ "$major" -gt "$REQUIRED_MAJOR" ] || { [ "$major" -eq "$REQUIRED_MAJOR" ] && [ "$minor" -ge "$REQUIRED_MINOR" ]; }
+}
+
+if ! node_ok; then
+  echo "Node >=${REQUIRED_MAJOR}.${REQUIRED_MINOR} not found; installing Node ${REQUIRED_MAJOR} via npm 'n'..." >&2
+  if command -v npm >/dev/null 2>&1; then
+    export N_PREFIX="${N_PREFIX:-$HOME/.local/n}"
+    npm install --global --prefix "$N_PREFIX" n >/dev/null
+    "$N_PREFIX/bin/n" "$REQUIRED_MAJOR"
+    export PATH="$N_PREFIX/bin:$PATH"
+    hash -r
+  fi
+fi
+if ! node_ok; then
+  echo "ERROR: Node >=${REQUIRED_MAJOR}.${REQUIRED_MINOR} is required (found: $(node -v 2>/dev/null || echo none))" >&2
+  exit 1
+fi
+
+echo "node $(node -v), npm $(npm -v)"
+npm ci --no-audit --no-fund
