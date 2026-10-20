@@ -171,3 +171,122 @@ test(
     assert.equal(refused.error?.code, "resource_exhausted");
   },
 );
+
+test(
+  "Lody announces a request that needs the consumer after a reconnect instead of leaving it stalled, and reports who resolved it",
+  { timeout: 40000 },
+  async (t) => {
+    const fixture = await lodyCloudFixture();
+    t.after(() => fixture.close());
+    const adapter = new LodyAdapter(fixture.config);
+    t.after(() => adapter.close());
+    await adapter.init();
+    const events: any[] = [];
+    adapter.watchEvents((event) => events.push(event));
+    const observed = () =>
+      (adapter.connected() as any).docs.get("external1")?.observed;
+    // A full-access turn: this Connector process owns automatic approval.
+    const sent = await adapter.call("lody.sessions.send", {
+      sessionId: "external1",
+      text: "Run unattended",
+    });
+    assert.equal(sent.error, undefined);
+    await setStatus(fixture, "external1", "running");
+    await until(async () => observed(), Boolean);
+    fixture.setOnline(false);
+    await until(
+      async () => adapter.available,
+      (value) => !value,
+    );
+    fixture.setOnline(true);
+    await until(
+      async () => adapter.available,
+      (value) => value,
+      15000,
+    );
+    await until(async () => observed(), Boolean, 10000);
+
+    // The policy is not known after the reconnect, so nothing approves for the
+    // consumer; the request is announced with that fact.
+    await fixture.assistant("external1", {
+      finished: false,
+      question: "plain",
+    });
+    const pending = await until(
+      async () =>
+        events.find((e) => e.nativeType === "lody.interaction.pending"),
+      Boolean,
+      10000,
+    );
+    assert.equal(pending.native.agenvo.permissionHandling, "unknown");
+    assert.equal(pending.native.requestId, "plain1");
+    assert.equal(pending.native.agenvo.turnId, "assistant1");
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    assert.equal((await adapter.interactions("external1")).length, 1);
+
+    // Another client answers: the event says so without naming a resolver.
+    const { doc, room } = await fixture.document("external1");
+    const row: any = doc.getList("history").get(1);
+    row
+      .get("items")
+      .get(1)
+      .get("permissionRequest")
+      .set("outcome", { outcome: "selected", optionId: "allow" });
+    doc.commit();
+    await room.subscription("fixture").waitUntilSynced();
+    const resolved = await until(
+      async () =>
+        events.find((e) => e.nativeType === "lody.interaction.resolved"),
+      Boolean,
+      10000,
+    );
+    assert.equal(resolved.native.requestId, "plain1");
+    assert.equal(resolved.native.outcome.optionId, "allow");
+    assert.equal(resolved.native.resolvedBy, undefined);
+    assert.equal(resolved.native.agenvo.turnId, "assistant1");
+  },
+);
+
+test(
+  "Lody keeps an oversized request announceable with its identity and the call that reads it",
+  { timeout: 30000 },
+  async (t) => {
+    const fixture = await lodyCloudFixture();
+    t.after(() => fixture.close());
+    const adapter = new LodyAdapter(fixture.config);
+    t.after(() => adapter.close());
+    await adapter.init();
+    const events: any[] = [];
+    adapter.watchEvents((event) => events.push(event));
+    await setStatus(fixture, "external1", "running");
+    await until(
+      async () => (adapter.connected() as any).docs.get("external1")?.observed,
+      Boolean,
+    );
+    await fixture.assistant("external1", {
+      finished: false,
+      question: true,
+      padding: 40000,
+    });
+    const pending = await until(
+      async () =>
+        events.find(
+          (e) =>
+            e.nativeType === "lody.interaction.pending" && e.native.truncated,
+        ),
+      Boolean,
+      10000,
+    );
+    assert.equal(pending.native.requestId, "question1");
+    assert.equal(pending.native.turnId, "assistant1");
+    assert.equal(
+      pending.native.permissionRequest.options[0].optionId,
+      "answer",
+    );
+    assert.equal(pending.native.permissionRequest.hasMeta, true);
+    assert.deepEqual(pending.native.agenvo.read, {
+      method: "lody.interactions.list",
+      sessionId: "external1",
+    });
+  },
+);

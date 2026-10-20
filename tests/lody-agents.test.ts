@@ -203,6 +203,8 @@ test(
   { timeout: 60000 },
   async (t) => {
     const { fixture, adapter, start, sent } = await setup(t);
+    const events: any[] = [];
+    adapter.watchEvents((event) => events.push(event));
     const answered = async (id: string) =>
       (
         fixture
@@ -221,6 +223,26 @@ test(
       (outcome) => outcome?.optionId === "allow",
       10000,
     );
+    // An approval the Connector made is evidence, not a request for the consumer.
+    const approved = await until(
+      async () =>
+        events.find(
+          (e) =>
+            e.threadId === full && e.nativeType === "lody.interaction.resolved",
+        ),
+      Boolean,
+    );
+    assert.equal(approved.native.resolvedBy, "agenvo_auto_approve");
+    assert.equal(approved.native.outcome.optionId, "allow");
+    assert.equal(approved.native.requestId, "plain1");
+    assert.equal(approved.native.agenvo.turnId, "assistant1");
+    assert.equal(
+      events.some(
+        (e) =>
+          e.threadId === full && e.nativeType === "lody.interaction.pending",
+      ),
+      false,
+    );
     // The same Session moves to an explicit policy: permissions are no longer
     // answered for it, and a native-default agent is never approved.
     for (const [agent, params] of [
@@ -234,6 +256,18 @@ test(
       await new Promise((resolve) => setTimeout(resolve, 1500));
       assert.equal(await answered(id), undefined, agent);
       assert.equal((await adapter.interactions(id)).length, 1, agent);
+      // The request needs the consumer: it is announced with the identity that
+      // lody.interactions.respond takes, and says nothing will answer it.
+      const pending = events.find(
+        (e) => e.threadId === id && e.nativeType === "lody.interaction.pending",
+      );
+      assert.equal(pending.native.requestId, "plain1", agent);
+      assert.equal(pending.native.agenvo.turnId, "assistant1", agent);
+      assert.equal(pending.native.agenvo.permissionHandling, "explicit", agent);
+      assert.equal(
+        pending.native.permissionRequest.options[0].optionId,
+        "allow",
+      );
     }
   },
 );

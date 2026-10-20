@@ -353,7 +353,12 @@ export async function lodyCloudFixture() {
     });
     const assistant = async (
       id: string,
-      options: { finished?: boolean; question?: boolean | "plain" } = {},
+      options: {
+        finished?: boolean;
+        question?: boolean | "plain";
+        // Oversized native request payload, in characters.
+        padding?: number;
+      } = {},
     ) => {
       const { doc, room } = await document(id);
       const row = doc.getList("history").pushContainer(new LoroMap());
@@ -376,6 +381,8 @@ export async function lodyCloudFixture() {
           "permissionRequest",
           new LoroMap(),
         );
+        if (options.padding)
+          permission.set("diff", "x".repeat(options.padding));
         if (options.question === "plain") {
           // A plain execution permission: no native metadata.
           permission.set("requestId", "plain1");

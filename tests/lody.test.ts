@@ -87,6 +87,10 @@ test(
       sessionId,
     });
     const request = interactions.items[0];
+    await until(
+      async () => events.includes("lody.interaction.pending"),
+      Boolean,
+    );
     await call("lody.interactions.respond", {
       sessionId,
       turnId: request.turnId,
@@ -101,6 +105,7 @@ test(
       () => doc.getList("history").toJSON() as any[],
       (x) => !!x[1]?.items[1]?.permissionRequest?.outcome,
     );
+    assert.ok(events.includes("lody.interaction.resolved"));
     assert.equal(
       (await call("lody.interactions.list", { sessionId })).items.length,
       0,

@@ -173,6 +173,17 @@ test(
       expectedTurnId: pending.items[0].turnId,
     });
     assert.equal(steered.confirmation, "native_steer_requeued");
+    // The requeued input stays correlatable: its turn identity is the one the
+    // call returned, and its history events carry that turn.
+    await until(
+      async () =>
+        events.find(
+          (e) =>
+            e.nativeType === "history.updated" &&
+            e.native.turn.id === steered.userTurnId,
+        ),
+      Boolean,
+    );
     assert.equal(steered.disposition, "unsupported");
     assert.equal(steered.recoveryOwned, true);
     await call("lody.interactions.respond", {
@@ -181,6 +192,19 @@ test(
       requestId: pending.items[0].requestId,
       outcome: { outcome: "selected", optionId: "allow" },
     });
+    const asked2 = events.find(
+      (e) =>
+        e.threadId === guarded && e.nativeType === "lody.interaction.pending",
+    );
+    assert.equal(asked2.native.requestId, pending.items[0].requestId);
+    assert.equal(asked2.native.agenvo.turnId, pending.items[0].turnId);
+    assert.equal(asked2.native.agenvo.agentConfigId, "acp");
+    const answered = events.find(
+      (e) =>
+        e.threadId === guarded && e.nativeType === "lody.interaction.resolved",
+    );
+    assert.equal(answered.native.outcome.optionId, "allow");
+    assert.equal(answered.native.resolvedBy, "agenvo_respond");
     await until(
       () => text(guarded),
       (r) => r.includes("MOCK_ACP_RESULT") && r.includes("follow up"),

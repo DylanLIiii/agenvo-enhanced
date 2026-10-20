@@ -145,6 +145,16 @@ export function pendingInteractions(doc: LoroDoc) {
   }[] = [];
   const list = doc.getList("history");
   for (let i = 0; i < list.length; i++) {
+    // Skip finished turns without materializing them: this runs on every change.
+    const raw = list.get(i);
+    if (
+      isContainer(raw) &&
+      raw.kind() === "Map" &&
+      (raw as LoroMap).get("role") === "assistant" &&
+      ((raw as LoroMap).get("finished") ||
+        typeof (raw as LoroMap).get("endedAt") === "number")
+    )
+      continue;
     const turn = readTurn(doc, i);
     if (
       turn.role !== "assistant" ||
@@ -208,4 +218,20 @@ export function writePermission(
   // Update only the outcome field, preserving concurrent changes to the tool.
   (request as LoroMap).set("outcome", outcome);
   doc.commit();
+}
+
+/** The native outcome of a permission request, if one was written. */
+export function permissionOutcomeOf(
+  doc: LoroDoc,
+  turnId: string,
+  requestId: string,
+) {
+  const list = doc.getList("history");
+  for (let i = list.length - 1; i >= 0; i--) {
+    const raw = list.get(i);
+    if (!isContainer(raw) || (raw as LoroMap).get("id") !== turnId) continue;
+    for (const item of readTurn(doc, i).items ?? [])
+      if (item?.permissionRequest?.requestId === requestId)
+        return item.permissionRequest.outcome ?? undefined;
+  }
 }

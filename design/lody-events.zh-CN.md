@@ -9,7 +9,7 @@
 3. **订阅（观察）与读取分离**：观察由 Connector 根据原生 Session 状态自动管理，调用者不再需要为了收事件而调用 `lody.sessions.subscribe`。
 4. 事件保留原生类型和数据，仅在 `native.agenvo` 命名空间内追加身份与读取目标；截断事件保留确定的读取目标；新增一类派生事件 `lody.interaction.pending` / `lody.interaction.resolved`，只为让 Relay 能按原生类型过滤“需要输入”。
 
-需要用户在实现前决定的事项见[待决定](#待决定)。
+需要用户在实现前决定的事项见[决定记录](#决定记录)。
 
 ## 现状与证据
 
@@ -119,13 +119,13 @@
 | `doc-metadata` | 原生（loro-repo） | Session 元数据变化 | 保留 `{kind, docId, patch, by}`，不丢弃任何 patch。阶段 1 的测量没有发现只含 `lastRunningSeen` 的 patch，见[心跳测量](#心跳测量)。 |
 | `doc-existence-changed` | 原生 | Session 创建、删除、恢复 | 原样。 |
 | `history.updated` | Agenvo 命名，原生 turn | 被观察 Session 的历史变化 | `native = {turn}`，turn 为原生 turn。 |
-| `lody.interaction.pending` | 派生自原生待处理权限请求 | 出现需要消费者处理的 `permissionRequest` | 见下文。 |
-| `lody.interaction.resolved` | 派生自原生 `permissionRequest.outcome` | 请求获得结果 | 含结果和处理者。 |
+| `lody.interaction.pending` | 派生自原生待处理权限请求 | 出现不会被自动批准的 `permissionRequest` | `native = {turnId, requestId, toolCallId, title, permissionRequest}`；每个请求只发一次，也包括自动批准写入失败后的请求。 |
+| `lody.interaction.resolved` | 派生自原生 `permissionRequest.outcome` | 请求获得结果，或其所在 turn 在没有结果的情况下结束 | `native = {turnId, requestId, outcome?, resolvedBy?}`；`resolvedBy` 只在本 Connector 写入时出现（`agenvo_respond`、`agenvo_auto_approve`）。 |
 | `agenvo.resync_required` | Agenvo | 观察中断 | 增加范围信息，见生命周期。 |
 
 不新增 Agenvo 自己的 `status.changed`：状态转换已是原生 `doc-metadata`，消费者读取 `patch.status.type`。也不新增“turn 完成”类型：完成是 `history.updated` 中 `turn.finished: true`；失败、取消、完成都会 finished，含义由消费者判断，遵守“不为统一接口强行转换成结构化结论”。
 
-“需要输入”是例外，原因：Relay 只能按 `nativeTypes` 和 `threadId` 过滤。没有独立类型时，只想在需要输入时被唤醒的订阅必须接收全部 `doc-metadata`，每次状态变化都唤醒一次 Agent。派生事件不判断业务结果，只把“存在一个无人响应的原生请求”这一原生事实变成可过滤的类型。若用户不接受新增类型，替代方案是只靠 `doc-metadata`（见待决定 2）。
+“需要输入”是例外，原因：Relay 只能按 `nativeTypes` 和 `threadId` 过滤。没有独立类型时，只想在需要输入时被唤醒的订阅必须接收全部 `doc-metadata`，每次状态变化都唤醒一次 Agent。派生事件不判断业务结果，只把“存在一个无人响应的原生请求”这一原生事实变成可过滤的类型。若用户不接受新增类型，替代方案是只靠 `doc-metadata`（见[决定记录](#决定记录) 2，已选择新增）。
 
 ### 身份：`native.agenvo`
 
@@ -193,7 +193,7 @@
 - 结构性变更仍回放最后 50 条 `history.updated`；超过 50 条同时发 session 范围的缺口。不改变这个有限窗口。
 - 消费者恢复成本：全局重同步后，对关注的 Session 读 `lody.sessions.get`（元数据，含 `status`）和 `lody.interactions.list`，即 O(关注数) 的小读取；只有 `status`/`lastHandledUserMsgId` 表明期间有变化的 Session 才需要读历史。session 范围缺口只需重读该 Session。
 
-仍然存在的一个读取成本：`lody.sessions.history` 的游标只能从头向后翻页（[`lody.ts:292`](../apps/lody/src/lody.ts#L292)），大历史“读尾部”需要 O(N) 翻页。建议增加以已知 `turnId` 之后为起点的读取（`afterTurnId`），否则缺口恢复成本随历史长度增长。这是读取接口增补，列入阶段 4，需要用户确认（待决定 4）。
+仍然存在的一个读取成本：`lody.sessions.history` 的游标只能从头向后翻页（[`lody.ts:292`](../apps/lody/src/lody.ts#L292)），大历史“读尾部”需要 O(N) 翻页。建议增加以已知 `turnId` 之后为起点的读取（`afterTurnId`），否则缺口恢复成本随历史长度增长。这是读取接口增补，列入阶段 4，按决定记录 4 留到阶段 4。
 
 ## 与阶段 1/2 语义的交互
 
@@ -211,7 +211,7 @@
 | `nativeTypes: ["history.updated"]` 或 `["doc-metadata"]` 的订阅 | 继续收到同名事件；`native` 追加 `agenvo` 键；`doc-metadata` 少了仅含心跳字段的事件；不再需要先调用订阅。新增类型不会被已有 allowlist 收到 |
 | 不带 `nativeTypes` 的订阅 | 额外收到 `lody.interaction.*`，并且不调用订阅也能收到活跃 Session 的 `history.updated` |
 | 依赖 `{sessionId, truncated, omittedBytes}` 形态的消费者 | 超 24KB 事件形态改变（见截断语义） |
-| `lody.sessions.subscribe` | 建议删除（待决定 1）；若保留，仍是“打开文档”，继续占用名额 |
+| `lody.sessions.subscribe` | 已删除（0.2.0 起的破坏性变更）：调用返回 `unsupported_capability`；迁移方式是删除调用，MCP 订阅不变 |
 | 断线恢复 | 不再需要重订阅；仍需处理 `agenvo.resync_required`，现带 `scope`/`sessionId` |
 | `docs/lody.md`、`docs/events.md` | 实现时更新：事件类型、身份、观察规则与云端事件范围；沿用 `create work context`、`submit input`、`read output` 术语 |
 
@@ -233,10 +233,10 @@
 **阶段 1：事件内容（无生命周期变化）。**
 - `native.agenvo` 身份（`sessionId`、`agentConfigId`、`agentType`、`cliType`、`machineId`、`turnId`），截断保留读取目标，`onGap` 携带 `sessionId`，重同步增加 `scope`。
 - 测试：协议 fixture（`tests/lody.test.ts` 风格）——超过 24KB 的 turn 事件保留 `turn.id` 与读取目标；`doc-metadata` 截断后仍有 `status`；系统测试（扩展 `tests/system/lody-agents.test.ts`）——`NEEDS_PERMISSION` 流程中每个事件带正确 `agentConfigId` 和 `turnId`，并
-- 不改工具面，不动 `lody.sessions.subscribe`，独立于生命周期和待决定 1/2，适合先落地。
+- 不改工具面，不动 `lody.sessions.subscribe`，独立于生命周期，先落地。
 
 **阶段 2：观察与读取分离。**
-- 活跃集合、租约、驱逐、重连后自动恢复观察；`lody.sessions.subscribe` 按待决定 1 处理；`controlled` 与 `permissionHandling`。
+- 活跃集合、租约、驱逐、重连后自动恢复观察；删除 `lody.sessions.subscribe`；`controlled` 与 `permissionHandling`。
 - 测试：云端 fixture 创建 130+ 个 Session 逐个读取不触顶；128 个同时活跃时的容量事件与 `resource_exhausted`；daemon 重连后活跃 Session 无需调用订阅即继续收事件；重连后权限请求不再静默停住（`permissionHandling: unknown`）。Relay 集成测试经 webhook 验证事件不依赖订阅调用。
 
 **阶段 3：交互事件与关联证据。**
@@ -245,10 +245,31 @@
 
 **阶段 4（可选，需确认）：** `lody.capability.published`；`lody.sessions.history` 的 `afterTurnId`。测试：flock 订阅探测；大历史尾部读取成本。
 
-## 待决定
+## 实现状态与验证
+
+阶段 1–3 已实现（本地提交，未推送）。
+
+| 阶段 | 内容 | 主要代码 | 测试 |
+| --- | --- | --- | --- |
+| 1 事件内容 | `native.agenvo` 身份；截断保留读取目标；`onGap` 带 `sessionId`，重同步带 `scope`；顺序化发布（元数据查询后再发出，修正了本地模式异步过滤可能乱序） | [`events.ts`](../apps/lody/src/events.ts)、[`workspace.ts`](../apps/lody/src/workspace.ts) | `tests/lody.test.ts`（超大 turn 与元数据截断、重同步 scope）；`tests/system/lody-agents.test.ts`（真实 `lody@0.104.0` 守护进程加 mock ACP：每个事件的 `agentConfigId`/`turnId`） |
+| 2 观察与读取分离 | `isActive` 驱动的自动观察、宽限期释放、读取租约与 LRU 驱逐、容量事件、移除 `lody.sessions.subscribe` | `workspace.ts`（`entry`/`use`/`observe`） | `tests/lody-events.test.ts`（无订阅调用即收事件、宽限期释放、重连后恢复观察、130 个 Session 读取不触顶、128 活跃时的 `observation_capacity` 与 `resource_exhausted`） |
+| 3 交互事件 | `lody.interaction.pending/resolved`、自动批准结果证据、`permissionHandling: unknown` 的请求不静默停住 | `workspace.ts`（`scan`/`announce`/`resolved`） | `tests/lody-events.test.ts`（重连后宣告、他人回应、超大请求）、`tests/lody-agents.test.ts`（自动批准只有 `resolved`，显式策略与问题类有 `pending`）、`tests/system/lody-agents.test.ts`（真实守护进程的 `pending`/`resolved` 与 steer 的 `userTurnId` 关联）、`tests/integration/lody.test.ts`（Relay webhook 按 `nativeTypes` 过滤） |
+
+实现中与设计不同或新增的细节：
+
+- **不抑制心跳 patch**：见[心跳测量](#心跳测量)。
+- **steer 关联**：系统测试确认 requeue 后的用户 turn 在 `history.updated` 中的 `turn.id` 等于调用返回的 `userTurnId`，因此没有新增 `agenvo.userTurnId`。
+- **`resolved` 在 turn 无结果结束时也发出**（`outcome` 缺省），因为对消费者而言请求已不再需要处理。
+- **`respond` 的本地写入不触发 `history.updated`**（Loro 本地提交事件被跳过），所以 `lody.interaction.resolved` 同时承担这次回应的证据。
+- **`pendingInteractions` 先看 turn 的 `finished` 再物化**：每次历史变化都会扫描，避免对大历史做 O(N) 的 JSON 物化。
+- **宽限期**：`observation.graceMs`（默认 30 秒）是模块级常量，测试缩短它，不是配置项。
+- **本期未做**：`lody.capability.published` 与 `lody.sessions.history` 的 `afterTurnId`（阶段 4，待用户确认）；真实 provider、云端生产环境和 ChatGPT 客户端的验收。
+- **已知限制**：长期停留在 `running` 的僵尸 Session（机器崩溃但元数据未更新）会占用观察名额，直到状态改变；128 个这样的 Session 会使新 Session 无法观察并触发 `observation_capacity` 事件。
+
+## 决定记录
 
 1. **`lody.sessions.subscribe` 的处理。** 已决定：删除（选项 A），标注破坏性变更。
-2. **是否新增派生事件 `lody.interaction.pending/resolved`。** 推荐新增，因为 Relay 只能按原生类型过滤；替代方案是只用 `doc-metadata`，消费者自己过滤，代价是每次状态变化都唤醒一次。
-3. **身份放在 `native.agenvo` 还是扩展 `runtimeEvent` 顶层。** 推荐前者（不改共享协议，不影响 Herdr/Codex）；后者能让所有 Connector 受益，但改变 Relay 与 SDK 契约。
-4. **是否接受 `lody.sessions.history` 增加 `afterTurnId`**（读取接口增补，阶段 4）。
+2. **是否新增派生事件 `lody.interaction.pending/resolved`。** 已决定：新增，因为 Relay 只能按原生类型过滤；替代方案是只用 `doc-metadata`，消费者自己过滤，代价是每次状态变化都唤醒一次。
+3. **身份放在 `native.agenvo` 还是扩展 `runtimeEvent` 顶层。** 已决定：前者（不改共享协议，不影响 Herdr/Codex）；后者能让所有 Connector 受益，但改变 Relay 与 SDK 契约。
+4. **`lody.sessions.history` 的 `afterTurnId`**：留到阶段 4，阶段 1–3 不需要它。
 5. **心跳 patch 的抑制规则**：已由阶段 1 实测决定，不抑制，见[心跳测量](#心跳测量)。

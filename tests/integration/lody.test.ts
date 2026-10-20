@@ -78,3 +78,46 @@ test(
     assert.equal(entry.env, undefined);
   },
 );
+
+test(
+  "Lody wakes a webhook consumer only for requests that need input when it filters by native type",
+  { timeout: 45000 },
+  async (t) => {
+    const lab = await eventsLab(t);
+    const cloud = await lodyCloudFixture();
+    lab.cleanup(() => cloud.close());
+    const device = await lab.connect([cloud.config]);
+    await lab.rpc(
+      "events/subscribe",
+      lab.subscription(device, "lody", {
+        nativeTypes: ["lody.interaction.pending"],
+      }),
+    );
+    await lab.call(device, "lody", "lody.sessions.send", {
+      sessionId: "external1",
+      text: "Needs a decision",
+    });
+    await cloud.repo.upsertDocMeta("session-external1", {
+      status: { type: "running" },
+    });
+    await cloud.assistant("external1", { finished: false, question: true });
+    await cloud.repo.upsertDocMeta("session-external1", {
+      status: { type: "requestPermission" },
+    });
+    const woken = await until(
+      () => lab.received,
+      (items) =>
+        items.some((e) => e.data.nativeType === "lody.interaction.pending"),
+    );
+    const wake = woken.find(
+      (e) => e.data.nativeType === "lody.interaction.pending",
+    );
+    assert.equal(wake.data.threadId, "external1");
+    assert.equal(wake.data.native.requestId, "question1");
+    assert.equal(wake.data.native.agenvo.agentConfigId, "config1");
+    assert.ok(
+      woken.every((e) => e.data.nativeType === "lody.interaction.pending"),
+      "history and metadata events must not wake this subscriber",
+    );
+  },
+);

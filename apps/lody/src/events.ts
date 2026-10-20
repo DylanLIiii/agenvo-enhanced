@@ -83,6 +83,27 @@ export function sessionEventData(
         },
       },
     };
+  if (typeof native.requestId === "string" && native.permissionRequest)
+    return {
+      sessionId,
+      turnId: native.turnId,
+      requestId: native.requestId,
+      toolCallId: native.toolCallId,
+      title: native.title,
+      permissionRequest: {
+        options: (native.permissionRequest.options ?? []).map((o: any) => ({
+          optionId: o.optionId,
+          name: o.name,
+          kind: o.kind,
+        })),
+        hasMeta: native.permissionRequest._meta != null,
+      },
+      ...base,
+      agenvo: {
+        ...agenvo,
+        read: { method: "lody.interactions.list", sessionId },
+      },
+    };
   if (patch && typeof patch === "object")
     return {
       kind: native.kind,

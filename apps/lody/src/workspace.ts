@@ -16,6 +16,7 @@ import {
   appendUserTurn,
   createInput,
   pendingInteractions,
+  permissionOutcomeOf,
   readTurn,
   sessionSchema,
   writePermission,
@@ -167,6 +168,8 @@ export class LodyWorkspace {
   meta!: RepoRoomSubscription;
   private docs = new Map<string, DocEntry>();
   private graces = new Map<string, NodeJS.Timeout>();
+  // Requests already announced as pending, per Session (JSON [turnId, requestId]).
+  private announced = new Map<string, Set<string>>();
   private sweeper?: NodeJS.Timeout;
   private machines = new Map<
     string,
@@ -622,9 +625,12 @@ export class LodyWorkspace {
           this.onGap?.(id);
         }
       }
+      this.scan(id, doc);
       if (this.policies.get(id) === "auto_approve_plain")
         void this.approvePermissions(id, doc);
     });
+    // Requests that were already waiting when the document opened.
+    this.scan(id, doc);
     return {
       doc,
       room,
@@ -854,7 +860,10 @@ export class LodyWorkspace {
       );
     return { sessionId: id, turnId, interruption: "requested", native };
   }
-  async respond(input: z.infer<typeof permissionInput>) {
+  async respond(
+    input: z.infer<typeof permissionInput>,
+    resolvedBy = "agenvo_respond",
+  ) {
     return this.use(input.sessionId, async ({ doc, room }) => {
       writePermission(doc, input.turnId, input.requestId, input.outcome);
       try {
@@ -871,6 +880,13 @@ export class LodyWorkspace {
           },
         );
       }
+      this.resolved(
+        input.sessionId,
+        input.turnId,
+        input.requestId,
+        input.outcome,
+        resolvedBy,
+      );
       return {
         sessionId: input.sessionId,
         requestId: input.requestId,
@@ -879,25 +895,108 @@ export class LodyWorkspace {
       };
     });
   }
+  private autoEligible(
+    request: ReturnType<typeof pendingInteractions>[number],
+  ) {
+    const p = request.native.permissionRequest;
+    // Unknown metadata can describe a user question. Only unambiguous plain
+    // execution permissions are answered automatically; all others stay visible.
+    return (
+      !(p._meta || request.native._meta) &&
+      p.options?.some((o: any) => o.kind === "allow_once")
+    );
+  }
+  private announce(
+    id: string,
+    request: ReturnType<typeof pendingInteractions>[number],
+  ) {
+    const known = this.announced.get(id) ?? new Set<string>();
+    this.announced.set(id, known);
+    const key = JSON.stringify([request.turnId, request.requestId]);
+    if (known.has(key)) return;
+    known.add(key);
+    const { permissionRequest, toolCallId, title } = request.native;
+    this.publish(
+      "lody.interaction.pending",
+      id,
+      {
+        turnId: request.turnId,
+        requestId: request.requestId,
+        toolCallId,
+        title,
+        permissionRequest,
+      },
+      false,
+      request.turnId,
+    );
+  }
+  private resolved(
+    id: string,
+    turnId: string,
+    requestId: string,
+    outcome: unknown,
+    resolvedBy?: string,
+  ) {
+    this.announced.get(id)?.delete(JSON.stringify([turnId, requestId]));
+    this.publish(
+      "lody.interaction.resolved",
+      id,
+      {
+        turnId,
+        requestId,
+        ...(outcome ? { outcome } : {}),
+        ...(resolvedBy ? { resolvedBy } : {}),
+      },
+      false,
+      turnId,
+    );
+  }
+  /**
+   * Announce requests that need a consumer and report announced ones that are
+   * gone. Requests this Connector is about to approve are not announced; the
+   * approval reports them instead.
+   */
+  private scan(id: string, doc: LoroDoc) {
+    const pending = pendingInteractions(doc);
+    const auto = this.policies.get(id) === "auto_approve_plain";
+    for (const request of pending)
+      if (!(auto && this.autoEligible(request))) this.announce(id, request);
+    const present = new Set(
+      pending.map((r) => JSON.stringify([r.turnId, r.requestId])),
+    );
+    for (const key of [...(this.announced.get(id) ?? [])]) {
+      if (present.has(key)) continue;
+      const [turnId, requestId] = JSON.parse(key) as [string, string];
+      this.resolved(
+        id,
+        turnId,
+        requestId,
+        permissionOutcomeOf(doc, turnId, requestId),
+      );
+    }
+  }
   private async approvePermissions(id: string, doc: LoroDoc) {
     for (const request of pendingInteractions(doc)) {
       const p = request.native.permissionRequest;
-      // Unknown metadata can describe a user question. Only unambiguous plain
-      // execution permissions are answered automatically; all others stay visible.
-      if (p._meta || request.native._meta) continue;
       const option = p.options?.find((o: any) => o.kind === "allow_once");
       const key = `${id}:${request.turnId}:${request.requestId}`;
-      if (!option || this.responding.has(key)) continue;
+      if (!this.autoEligible(request) || this.responding.has(key)) continue;
       this.responding.add(key);
       try {
-        await this.respond({
-          sessionId: id,
-          turnId: request.turnId,
-          requestId: request.requestId,
-          outcome: { outcome: "selected", optionId: option.optionId },
-        });
+        const outcome = { outcome: "selected", optionId: option.optionId };
+        await this.respond(
+          {
+            sessionId: id,
+            turnId: request.turnId,
+            requestId: request.requestId,
+            outcome,
+          },
+          "agenvo_auto_approve",
+        );
       } catch {
-        /* Failed permission submission remains discoverable, never replayed here. */
+        // A failed submission stays discoverable, is never replayed here, and
+        // now needs the consumer.
+        this.announce(id, request);
       } finally {
         this.responding.delete(key);
       }
