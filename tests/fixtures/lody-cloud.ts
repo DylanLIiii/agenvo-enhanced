@@ -321,7 +321,13 @@ export async function lodyCloudFixture() {
               result =
                 req.params.expectedTurnId === "assistant1"
                   ? { applied: true, disposition: "applied" }
-                  : { applied: false, disposition: "stale-turn" };
+                  : req.params.expectedTurnId === "unsupported"
+                    ? {
+                        applied: false,
+                        disposition: "unsupported",
+                        recoveryOwned: true,
+                      }
+                    : { applied: false, disposition: "stale-turn" };
             await stream(req.replyTo).append({
               part: {
                 contentType: "application/json",
@@ -347,7 +353,7 @@ export async function lodyCloudFixture() {
     });
     const assistant = async (
       id: string,
-      options: { finished?: boolean; question?: boolean } = {},
+      options: { finished?: boolean; question?: boolean | "plain" } = {},
     ) => {
       const { doc, room } = await document(id);
       const row = doc.getList("history").pushContainer(new LoroMap());
@@ -370,13 +376,21 @@ export async function lodyCloudFixture() {
           "permissionRequest",
           new LoroMap(),
         );
-        permission.set("requestId", "question1");
-        permission.set("options", [
-          { optionId: "answer", kind: "allow_once", name: "Answer" },
-        ]);
-        permission.set("_meta", {
-          lody: { elicitation: { version: 1, questions: [] } },
-        });
+        if (options.question === "plain") {
+          // A plain execution permission: no native metadata.
+          permission.set("requestId", "plain1");
+          permission.set("options", [
+            { optionId: "allow", kind: "allow_once", name: "Allow" },
+          ]);
+        } else {
+          permission.set("requestId", "question1");
+          permission.set("options", [
+            { optionId: "answer", kind: "allow_once", name: "Answer" },
+          ]);
+          permission.set("_meta", {
+            lody: { elicitation: { version: 1, questions: [] } },
+          });
+        }
       }
       doc.commit();
       await room.subscription("fixture").waitUntilSynced();

@@ -106,21 +106,21 @@ export class LodyAdapter implements Adapter {
       "lody.sessions.create",
       createInput,
       false,
-      "Create work context as native Session metadata without user input. No provider prompt is sent.",
+      "Create work context as native Session metadata without user input, for any agent configuration discovered by lody.catalog. No provider prompt is sent; permission handling is chosen when submitting input.",
       (p) => this.connected().create(p),
     );
     define(
       "lody.sessions.send",
       sendInput,
       false,
-      "Submit input in full access via synchronized history and activation. Native Lody owns busy delivery. No replay or Connector queue.",
+      "Submit input via synchronized history and activation. Optional modeId, modelId and configOptionValues are checked against the agent configuration's native capability before writing and are not supplied by the daemon for you. Without a modeId or configOptionValues, builtin Codex, Claude, DeepSeek and Kimi configurations that advertise a recognized full-access setting run in full access and plain execution permissions are approved automatically; every other configuration keeps its native default and permission requests stay explicit interactions. Native Lody owns busy delivery. No replay or Connector queue.",
       (p) => this.connected().send(p),
     );
     define(
       "lody.sessions.steer",
       sendInput.extend({ expectedTurnId: turnId }),
       false,
-      "Offer input to an exact active turn. An uncertain result never promotes or replays the input.",
+      "Offer input to an exact active turn, with the same optional selections as lody.sessions.send. If the provider cannot steer, Lody requeues the input as a follow-up turn and the result reports confirmation native_steer_requeued with the native disposition. Other uncertain results are unknown and are never replayed.",
       (p) => this.connected().send(p, p.expectedTurnId),
     );
     define(

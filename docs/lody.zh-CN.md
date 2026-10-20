@@ -57,7 +57,9 @@ return await call(target, "lody.sessions.create", {
 
 调用 Outcome 包含 `result.session.id`。创建只写入 Session 元数据，不发送提示词。可选的原生 `project` 用于选择 GitHub 仓库及分支，或执行机器上登记的项目。上下文创建成功不证明 provider 能够成功执行；空 Session 仍遵循 Lody 的原生生命周期。
 
-`lody.sessions.send` 接受 `sessionId`、`text` 和可选的 `modelId`。执行支持声明了已识别 full-access 模式的 builtin Codex 与 Claude 配置，包括通过原生 config options 声明的模式。其他配置仍可发现。忙时输入由 Lody 派发，Agenvo 不增加队列，也不自动重发输入。
+`lody.sessions.send` 接受 `sessionId`、`text`，以及可选的 `modelId`、`modeId` 和 `configOptionValues`。`lody.catalog` 列出的任何 Agent 配置都可使用，包括 builtin、registry 和 custom ACP Agent。Agenvo 在写入前，按 Lody 为该配置发布的 capability（`modes`、`models`、`configOptions`）校验这些选择，因为原生守护进程不会校验用户轮次的选择，而是原样转给 Agent。若 Lody 尚未探测该配置（创建后到 Agent 首次运行前的数秒内），带选择的输入会以 `unsupported_capability` 拒绝；请省略选择或稍后重试。
+
+未传 `modeId` 或 `configOptionValues` 时，声明了对应设置的 builtin Codex（`agent-full-access`）、Claude（`bypassPermissions`）、DeepSeek Harness（`danger-full-access`）和 Kimi（`permission_mode` 为 `yolo`）配置以 full access 运行，普通执行权限自动批准。其他配置（包括 Grok、registry 和 custom Agent）使用原生默认设置，权限请求保持为显式交互。要让 Grok 无人值守运行，传入 `configOptionValues: { "permission_mode": "always-approve" }`；这类显式选择同样会关闭自动批准。忙时输入由 Lody 派发，Agenvo 不增加队列，也不自动重发输入。
 
 `cloud_input_synced` 表示历史和派发标记已到达云端，不代表机器已经开始执行或任务成功。写入后超时返回 `unknown`，原生身份保留在 `error.native` 中；重新输入前应检查 Session。`local_input_received` 表示 daemon 返回的版本向量已覆盖写入，不承诺磁盘持久化、云端上传或执行完成。Connector 在内存保留协议副本，重启后从连接的服务重建；未确认写入没有 Connector 侧的恢复保证。
 
@@ -67,7 +69,7 @@ return await call(target, "lody.sessions.create", {
 - `lody.sessions.subscribe` 订阅当前连接上的文档变化，通过 [MCP events](events.zh-CN.md) 接收更新。首次历史同步不是完成事件；收到 `agenvo.resync_required` 后重新订阅并读取状态和历史。每个连接最多打开 128 个 Session 文档，不提供第二套观察日志。
 - `lody.interactions.list` 返回待回应原生请求、`sessionId`、`turnId`、`requestId` 和 response schema。`lody.interactions.respond` 使用这些原生标识及 `outcome` 回应。已受控 Session 的普通执行审批自动允许；用户问题和未知元数据保留显式回应。同步确认不证明 provider 已消费回应，也不证明赢得并发竞争。
 - `lody.sessions.cancel` 要求显式 `sessionId` 和 `turnId`，仅取消该轮次一次。本地活跃轮次的 ID 从 `lody.sessions.live` 读取；云端通过 `lody.sessions.history` 获取未结束的 assistant 轮次。拒绝或超时后不会自动重选目标。
-- `lody.sessions.steer` 要求 `expectedTurnId`。结果不确定时不重发或转为后续输入。
+- `lody.sessions.steer` 要求 `expectedTurnId`，并接受与 send 相同的可选选择。若 provider 不能 steer，Lody 会把输入重新排队为后续轮次；结果为 `confirmation: "native_steer_requeued"`，并携带原生 `disposition` 与 `recoveryOwned`。其他不确定结果保持 `unknown`，不重发。
 - `lody.sessions.archive/restore` 修改原生归档元数据。归档可能停止执行并释放资源；restore 不承诺恢复 provider。
 
 本连接器适配公开源码中的 Lody 客户端协议。云端协议测试使用真实隔离的 Loro Streams 服务，账号与执行端为 fixture；生产云端账号仍未验收。本地系统测试使用 Lody 0.104.0 的原生 daemon/ACP、真实 Codex 和隔离模型，覆盖 Relay MCP 调用及断线恢复；测试组装仅将发布 bundle 的平台选择常量改为 OSS，未修改协议或执行代码。

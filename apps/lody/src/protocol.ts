@@ -33,8 +33,14 @@ export const createInput = z.strictObject({
   title: z.string().max(1000).optional(),
   project: projectSchema.optional(),
 });
+export const configOptionValues = z.record(
+  z.string().min(1),
+  z.union([z.string(), z.boolean()]),
+);
 export const sendOptions = z.strictObject({
   modelId: z.string().min(1).optional(),
+  modeId: z.string().min(1).optional(),
+  configOptionValues: configOptionValues.optional(),
 });
 export const sendInput = sessionTarget.extend({
   text: z.string().min(1).max(48000),
@@ -99,7 +105,7 @@ export function appendUserTurn(
     userId: string;
     text: string;
     timestamp: string;
-    inputConfig: Record<string, string>;
+    inputConfig: Record<string, string | Record<string, string | boolean>>;
     steer?: boolean;
   },
 ) {
@@ -114,8 +120,14 @@ export function appendUserTurn(
   }))
     row.set(key, value);
   const config = row.setContainer("inputConfig", new LoroMap());
-  for (const [key, value] of Object.entries(input.inputConfig))
-    config.set(key, value);
+  for (const [key, value] of Object.entries(input.inputConfig)) {
+    if (typeof value === "string") config.set(key, value);
+    else {
+      // Nested ACP selections are native LoroMaps, as the daemon expects.
+      const nested = config.setContainer(key, new LoroMap());
+      for (const [id, option] of Object.entries(value)) nested.set(id, option);
+    }
+  }
   const item = row
     .setContainer("items", new LoroList())
     .pushContainer(new LoroMap());

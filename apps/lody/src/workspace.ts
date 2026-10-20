@@ -19,6 +19,96 @@ import {
   type sendInput,
 } from "./protocol.js";
 
+type Selection =
+  { modeId: string } | { configOptionValues: Record<string, string> };
+
+function modeIds(capability: any) {
+  const ids = new Set<string>(
+    (capability?.modes ?? []).map((mode: any) => mode.id),
+  );
+  for (const option of capability?.configOptions ?? [])
+    if (option.category === "mode" && option.type === "select")
+      for (const value of option.options ?? [])
+        if (typeof value.value === "string") ids.add(value.value);
+  return ids;
+}
+
+function fullAccessSelection(
+  config: any,
+  capability: any,
+): Selection | undefined {
+  if (config.cliType !== "builtin" || !capability) return;
+  const modes = modeIds(capability);
+  const mode = (ids: string[]) => {
+    const modeId = ids.find((id) => modes.has(id));
+    return modeId ? { modeId } : undefined;
+  };
+  // Identifiers follow the native client's own full-access classification. They
+  // are only meaningful for builtin providers; registry and custom agents stay
+  // caller-explicit.
+  switch (config.agentType) {
+    case "codex":
+      return mode(["agent-full-access", "danger-full-access"]);
+    case "claude":
+      return mode(["bypassPermissions"]);
+    case "deepseek":
+      return mode(["danger-full-access"]);
+    case "kimi": {
+      const option = (capability.configOptions ?? []).find(
+        (o: any) => o.id === "permission_mode" && o.type === "select",
+      );
+      if (option?.options?.some((v: any) => v.value === "yolo"))
+        return { configOptionValues: { permission_mode: "yolo" } };
+      return mode(["yolo"]);
+    }
+  }
+}
+
+function validateSelection(
+  capability: any,
+  requested: Pick<
+    z.infer<typeof sendInput>,
+    "modeId" | "modelId" | "configOptionValues"
+  >,
+) {
+  const reject = (message: string) => {
+    throw new Fault("invalid_params", message);
+  };
+  const options: any[] = capability.configOptions ?? [];
+  const selectValues = (category: string) =>
+    options
+      .filter((o) => o.category === category && o.type === "select")
+      .flatMap((o) => (o.options ?? []).map((v: any) => v.value));
+  if (requested.modeId && !modeIds(capability).has(requested.modeId))
+    reject(
+      `Unsupported ACP mode for this agent configuration: ${requested.modeId}`,
+    );
+  if (
+    requested.modelId &&
+    ![
+      ...(capability.models ?? []).map((m: any) => m.modelId),
+      ...selectValues("model"),
+    ].includes(requested.modelId)
+  )
+    reject(
+      `Unsupported ACP model for this agent configuration: ${requested.modelId}`,
+    );
+  for (const [id, value] of Object.entries(
+    requested.configOptionValues ?? {},
+  )) {
+    const option = options.find((o) => o.id === id);
+    if (!option) reject(`Unknown ACP config option: ${id}`);
+    else if (option.type === "boolean") {
+      if (typeof value !== "boolean")
+        reject(`Config option ${id} expects a boolean value`);
+    } else if (
+      typeof value !== "string" ||
+      !(option.options ?? []).some((v: any) => v.value === value)
+    )
+      reject(`Unsupported value for ACP config option ${id}`);
+  }
+}
+
 export async function bounded<T>(
   promise: Promise<T>,
   milliseconds = 7000,
@@ -227,6 +317,10 @@ export class LodyWorkspace {
     machineId: string,
     configId: string | undefined,
     project?: z.infer<typeof createInput>["project"],
+    requested: Pick<
+      z.infer<typeof sendInput>,
+      "modeId" | "modelId" | "configOptionValues"
+    > = {},
   ) {
     if (!configId)
       throw new Fault(
@@ -240,39 +334,41 @@ export class LodyWorkspace {
     const { flock, room } = await this.machine(machineId);
     await this.caughtUp(room);
     const config = flock.get(["agentConfig", configId]) as any;
-    const capabilities = flock.get(["acpCapability", configId]) as any;
+    const capability = flock.get(["acpCapability", configId]) as any;
     if (!config || config.id !== configId || config.machineId !== machineId)
       throw new Fault("not_found", "Lody agent configuration is unavailable");
-    if (
-      config.cliType !== "builtin" ||
-      !["codex", "claude"].includes(config.agentType)
-    )
-      throw new Fault(
-        "unsupported_capability",
-        "Full-access execution currently supports builtin Codex and Claude configurations",
-      );
-    const ids =
-      config.agentType === "codex"
-        ? ["agent-full-access", "danger-full-access"]
-        : ["bypassPermissions"];
-    const supportedModes = new Set<string>(
-      (capabilities?.modes ?? []).map((mode: any) => mode.id),
-    );
-    for (const option of capabilities?.configOptions ?? []) {
-      if (option.category === "mode" && option.type === "select")
-        for (const value of option.options ?? [])
-          if (typeof value.value === "string") supportedModes.add(value.value);
-    }
-    const modeId = ids.find((id) => supportedModes.has(id));
-    if (!modeId)
-      throw new Fault(
-        "unsupported_capability",
-        "The native capability catalog does not advertise a supported full-access mode",
-      );
-    return {
+    const execution = {
       cliType: String(config.cliType),
       agentType: String(config.agentType),
-      modeId,
+    };
+    const explicit = requested.modeId || requested.configOptionValues;
+    if (requested.modeId || requested.modelId || requested.configOptionValues) {
+      // The native daemon forwards user-turn selections to the ACP agent without
+      // validating them, so check them against the agent's own capability first.
+      if (!capability)
+        throw new Fault(
+          "unsupported_capability",
+          "The native runtime has not published this agent configuration's capabilities yet; retry after Lody probes it, or omit the selection",
+        );
+      validateSelection(capability, requested);
+    }
+    const base = {
+      ...execution,
+      ...(requested.modeId ? { modeId: requested.modeId } : {}),
+      ...(requested.configOptionValues
+        ? { configOptionValues: requested.configOptionValues }
+        : {}),
+    };
+    // Without an explicit permission selection, builtin providers whose native
+    // capability advertises a recognized full-access setting run in full access.
+    // Everything else keeps the native default and explicit interactions.
+    const fullAccess = explicit
+      ? undefined
+      : fullAccessSelection(config, capability);
+    return {
+      ...base,
+      ...fullAccess,
+      autoApprove: fullAccess !== undefined,
     };
   }
   private async quota(doc?: LoroDoc) {
@@ -433,6 +529,7 @@ export class LodyWorkspace {
       session.machineId,
       session.agentConfigId,
       session.project,
+      input,
     );
     if (
       execution.cliType !== session.cliType ||
@@ -452,13 +549,17 @@ export class LodyWorkspace {
       );
     const userTurnId = randomUUID(),
       timestamp = new Date().toISOString();
+    const { autoApprove, ...selection } = execution;
     const inputConfig = {
-      ...execution,
+      ...selection,
       prompt: input.text,
       ...(input.modelId ? { modelId: input.modelId } : {}),
       ...(expectedTurnId ? { _lodyDeliveryKind: "steer" } : {}),
     };
-    this.controlled.add(session.id);
+    // Automatic approval of plain execution permissions follows this turn's
+    // policy; a Session that moves to an explicit or native-default policy stops.
+    if (autoApprove) this.controlled.add(session.id);
+    else this.controlled.delete(session.id);
     try {
       doc.getMap("session").set("id", session.id);
       appendUserTurn(doc, {
@@ -483,6 +584,17 @@ export class LodyWorkspace {
             inputConfig,
           },
         );
+        if (!result?.applied && result?.recoveryOwned === true)
+          // The daemon owns recovery: it requeues the input as a follow-up turn
+          // (for example when the provider cannot steer). It is not lost or rejected.
+          return {
+            sessionId: session.id,
+            userTurnId,
+            confirmation: "native_steer_requeued",
+            disposition: result.disposition,
+            recoveryOwned: true,
+            native: result,
+          };
         if (!result?.applied)
           throw new Fault(
             "native_steer_not_applied",
