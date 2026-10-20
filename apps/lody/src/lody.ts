@@ -18,6 +18,7 @@ import {
   sessionTarget,
   readTurn,
   pendingInteractions,
+  turnPosition,
 } from "./protocol.js";
 import { truncatedTurn } from "./events.js";
 import { LodyWorkspace } from "./workspace.js";
@@ -148,10 +149,14 @@ export class LodyAdapter implements Adapter {
     );
     define(
       "lody.sessions.history",
-      sessionTarget.extend({ ...pagination }),
+      sessionTarget
+        .extend({ ...pagination, afterTurnId: turnId.optional() })
+        .refine((p) => !(p.cursor && p.afterTurnId), {
+          message: "Pass either cursor or afterTurnId",
+        }),
       true,
-      "Read output from native history by stable turn identity. Reading does not observe: events for active Sessions arrive through MCP events without any call.",
-      (p) => this.history(p.sessionId, p.cursor, p.limit),
+      "Read output from native history by stable turn identity. Pass afterTurnId (a turn id from an event or an earlier read) to start strictly after that turn in the current native order instead of at the beginning; an unknown id is not_found, and it cannot be combined with cursor. The returned nextCursor continues from there and detects concurrent edits like any cursor. Reading does not observe: events for active Sessions arrive through MCP events without any call.",
+      (p) => this.history(p.sessionId, p.cursor, p.limit, p.afterTurnId),
     );
     define(
       "lody.sessions.turn",
@@ -285,14 +290,26 @@ export class LodyAdapter implements Adapter {
       throw error;
     }
   }
-  history(id: string, cursor?: string, limit = 20) {
+  history(id: string, cursor?: string, limit = 20, afterTurnId?: string) {
     return this.connected().use(id, ({ doc }) =>
-      this.page(doc, id, cursor, limit),
+      this.page(doc, id, cursor, limit, afterTurnId),
     );
   }
-  private page(doc: LoroDoc, id: string, cursor?: string, limit = 20) {
+  private page(
+    doc: LoroDoc,
+    id: string,
+    cursor?: string,
+    limit = 20,
+    afterTurnId?: string,
+  ) {
     const list = doc.getList("history");
     let start = 0;
+    if (afterTurnId) {
+      const found = turnPosition(doc, afterTurnId);
+      if (found < 0)
+        throw new Fault("not_found", "No native turn has this afterTurnId");
+      start = found + 1;
+    }
     if (cursor) {
       let target: z.infer<typeof historyCursor>;
       try {

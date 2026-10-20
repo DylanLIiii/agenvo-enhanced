@@ -136,3 +136,42 @@ export function isActive(meta: Record<string, any>) {
     typeof meta.processingUserMsgId === "string"
   );
 }
+
+/**
+ * A published ACP capability row, as the daemon wrote it. It describes an
+ * agent configuration, not a Session, so there is no thread. An oversized row
+ * is reduced to the identifiers a selection is validated against.
+ */
+export function capabilityEventData(
+  agentConfigId: string,
+  machineId: string,
+  capability: any,
+  config?: Record<string, any>,
+): Record<string, unknown> {
+  const agenvo = {
+    agentConfigId,
+    machineId,
+    ...(typeof config?.agentType === "string"
+      ? { agentType: config.agentType }
+      : {}),
+    ...(typeof config?.cliType === "string" ? { cliType: config.cliType } : {}),
+    read: { method: "lody.catalog", machineId },
+  };
+  const full = { capability, agenvo };
+  const size = bytes(full);
+  if (size <= EVENT_LIMIT) return full;
+  const ids = (rows: any, key: string) =>
+    Array.isArray(rows)
+      ? rows.map((r: any) => r?.[key]).filter((v) => typeof v === "string")
+      : [];
+  return {
+    truncated: true,
+    omittedBytes: size,
+    capability: {
+      modes: ids(capability?.modes, "id"),
+      models: ids(capability?.models, "modelId"),
+      configOptions: ids(capability?.configOptions, "id"),
+    },
+    agenvo,
+  };
+}

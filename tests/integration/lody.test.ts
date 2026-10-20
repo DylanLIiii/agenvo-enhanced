@@ -121,3 +121,39 @@ test(
     );
   },
 );
+
+test(
+  "Lody capability publication reaches a webhook consumer that filters by native type",
+  { timeout: 45000 },
+  async (t) => {
+    const lab = await eventsLab(t);
+    const cloud = await lodyCloudFixture();
+    lab.cleanup(() => cloud.close());
+    const device = await lab.connect([cloud.config]);
+    await lab.rpc(
+      "events/subscribe",
+      lab.subscription(device, "lody", {
+        nativeTypes: ["lody.capability.published"],
+      }),
+    );
+    await lab.call(device, "lody", "lody.catalog", { machineId: "machine1" });
+    const machine = await cloud.repo.openFlockDoc("workspace1:mf:machine1");
+    const room = await cloud.repo.joinFlockDocRoom("workspace1:mf:machine1");
+    machine.flock.set(["acpCapability", "config1"], {
+      modes: [{ id: "plan", name: "Plan" }],
+    });
+    machine.flock.commit();
+    await room.subscription("fixture").waitUntilSynced();
+    const received = await until(
+      () => lab.received,
+      (items) => items.length > 0,
+    );
+    assert.deepEqual(
+      received.map((e) => e.data.nativeType),
+      ["lody.capability.published"],
+    );
+    assert.equal(received[0].data.threadId, undefined);
+    assert.equal(received[0].data.native.agenvo.agentConfigId, "config1");
+    assert.equal(received[0].data.native.capability.modes[0].id, "plan");
+  },
+);

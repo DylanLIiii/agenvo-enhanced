@@ -7,6 +7,7 @@ import type { LodyConfig } from "./config.js";
 import { CloudConnection } from "./cloud.js";
 import { LocalConnection } from "./local.js";
 import {
+  capabilityEventData,
   isActive,
   sessionEventData,
   type PermissionHandling,
@@ -171,6 +172,11 @@ export class LodyWorkspace {
   // Requests already announced as pending, per Session (JSON [turnId, requestId]).
   private announced = new Map<string, Set<string>>();
   private sweeper?: NodeJS.Timeout;
+  private capabilityOffs: Array<() => void> = [];
+  // Who wrote a request's outcome, and which resolutions were already reported
+  // (JSON [sessionId, turnId, requestId]); a request is reported resolved once.
+  private responders = new Map<string, string>();
+  private reported = new Set<string>();
   private machines = new Map<
     string,
     Promise<{
@@ -233,6 +239,10 @@ export class LodyWorkspace {
     }, 5000);
     this.sweeper.unref();
     void this.observeActive();
+    // The attached machine's capability rows are always watched; other
+    // machines are watched once this connection has opened them.
+    if (this.config.mode === "local")
+      void this.machine(this.config.machineId).catch(() => {});
   }
   /**
    * Publish one Session event in arrival order with the Session's current
@@ -370,12 +380,54 @@ export class LodyWorkspace {
         const name = `${this.config.workspaceId}:mf:${id}`;
         const { flock } = await this.repo.openFlockDoc(name);
         const room = await this.repo.joinFlockDocRoom(name);
+        await this.caughtUp(room);
+        this.watchCapabilities(id, flock);
         return { flock, room };
       })();
       this.machines.set(id, found);
       found.catch(() => this.machines.delete(id));
     }
     return found;
+  }
+  /**
+   * Report when the daemon publishes or changes an agent configuration's ACP
+   * capability row. Rows that already existed when the machine document
+   * caught up, and rewrites with identical content, are not news.
+   */
+  private watchCapabilities(
+    machineId: string,
+    flock: Awaited<ReturnType<LoroRepo["openFlockDoc"]>>["flock"],
+  ) {
+    const known = new Map<string, string>();
+    for (const row of flock.scan({ prefix: ["acpCapability"] }))
+      known.set(String(row.key[1]), JSON.stringify(row.value));
+    this.capabilityOffs.push(
+      flock.subscribe((batch) => {
+        for (const event of batch.events) {
+          const [table, configId] = event.key;
+          if (table !== "acpCapability" || typeof configId !== "string")
+            continue;
+          if (event.value === undefined) {
+            known.delete(configId);
+            continue;
+          }
+          const json = JSON.stringify(event.value);
+          if (known.get(configId) === json) continue;
+          known.set(configId, json);
+          const config = flock.get(["agentConfig", configId]) as any;
+          const native = capabilityEventData(
+            configId,
+            machineId,
+            event.value,
+            config,
+          );
+          this.publishing = this.publishing.then(() => {
+            if (!this.closed)
+              this.onEvent?.("lody.capability.published", undefined, native);
+          });
+        }
+      }),
+    );
   }
   private async executionConfig(
     machineId: string,
@@ -866,6 +918,11 @@ export class LodyWorkspace {
   ) {
     return this.use(input.sessionId, async ({ doc, room }) => {
       writePermission(doc, input.turnId, input.requestId, input.outcome);
+      // The daemon can react before the upload is confirmed; attribute it.
+      this.responders.set(
+        JSON.stringify([input.sessionId, input.turnId, input.requestId]),
+        resolvedBy,
+      );
       try {
         await this.uploaded(room);
       } catch {
@@ -885,7 +942,6 @@ export class LodyWorkspace {
         input.turnId,
         input.requestId,
         input.outcome,
-        resolvedBy,
       );
       return {
         sessionId: input.sessionId,
@@ -935,9 +991,15 @@ export class LodyWorkspace {
     turnId: string,
     requestId: string,
     outcome: unknown,
-    resolvedBy?: string,
   ) {
+    const key = JSON.stringify([id, turnId, requestId]);
     this.announced.get(id)?.delete(JSON.stringify([turnId, requestId]));
+    const resolvedBy = this.responders.get(key);
+    this.responders.delete(key);
+    if (this.reported.has(key)) return;
+    this.reported.add(key);
+    if (this.reported.size > 1024)
+      this.reported.delete(this.reported.values().next().value!);
     this.publish(
       "lody.interaction.resolved",
       id,
@@ -1034,6 +1096,7 @@ export class LodyWorkspace {
     this.closed = true;
     this.off?.();
     clearInterval(this.sweeper);
+    for (const off of this.capabilityOffs) off();
     for (const timer of this.graces.values()) clearTimeout(timer);
     this.graces.clear();
     for (const id of [...this.docs.keys()]) this.drop(id);

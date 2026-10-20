@@ -87,6 +87,20 @@ test(
       (row) => row?.modes?.length,
       30000,
     );
+    // The daemon's publication is announced with the row it wrote, so the
+    // rejected selection above can be retried without polling.
+    const published = await until(
+      async () =>
+        events.find((e) => e.nativeType === "lody.capability.published"),
+      (value) => Boolean(value),
+    );
+    assert.equal(published.threadId, undefined);
+    assert.equal(published.native.agenvo.agentConfigId, "acp");
+    assert.equal(published.native.agenvo.cliType, "custom");
+    assert.equal(published.native.agenvo.machineId, config.machineId);
+    assert.ok(
+      published.native.capability.modes.some((m: any) => m.id === "yolo"),
+    );
 
     // Valid selections reach the ACP agent, including a non-mode option.
     const chosen = await start();
@@ -111,9 +125,12 @@ test(
       assert.ok(methods.includes(m), m);
 
     // Invalid selections are stopped by Agenvo; the daemon would forward them.
+    const target = await start();
+    // Earlier turns may still be logging; count only after they settle.
+    await new Promise((resolve) => setTimeout(resolve, 1000));
     const before = (await requests()).length;
     const invalid = await adapter.call("lody.sessions.send", {
-      sessionId: await start(),
+      sessionId: target,
       text: "invalid",
       modeId: "nope",
     });
@@ -205,6 +222,17 @@ test(
     );
     assert.equal(answered.native.outcome.optionId, "allow");
     assert.equal(answered.native.resolvedBy, "agenvo_respond");
+    // History continues after a known turn with the same result as paging.
+    const all = (await call("lody.sessions.history", { sessionId: guarded }))
+      .items;
+    const after = await call("lody.sessions.history", {
+      sessionId: guarded,
+      afterTurnId: all[0].id,
+    });
+    assert.deepEqual(
+      after.items.map((i: any) => i.id),
+      all.slice(1).map((i: any) => i.id),
+    );
     await until(
       () => text(guarded),
       (r) => r.includes("MOCK_ACP_RESULT") && r.includes("follow up"),

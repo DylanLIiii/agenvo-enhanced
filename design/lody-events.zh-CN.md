@@ -201,7 +201,7 @@
 | --- | --- | --- |
 | 每轮自动批准边界（`controlled`） | 当前轮次是否会被自动批准；重启后不确定 | `agenvo.permissionHandling`；`unknown` 时不自动批准，请求以 `pending` 发出 |
 | steer 重新排队 | 原生 steer 未应用，输入作为后续轮次执行；调用结果为 `native_steer_requeued` | 事件靠 turn 身份关联：调用结果返回 `userTurnId`，后续 `history.updated` 的 `turn.id` 相同。阶段 3 的系统测试用 `acp-agent.mjs`（steer 返回 `unsupported`）确认这条 turn 的事件序列确实可关联；若缺少关联线索，再补 `agenvo.userTurnId`，不预先设计 |
-| capability 行发布时机 | 带 `modeId`/`modelId`/`configOptionValues` 的输入在 capability 发布前被 `unsupported_capability` 拒绝；发布发生在守护进程首次运行 Agent 之后 | 机器 flock 的 `acpCapability` 当前没有被观察。flock 实现有 `subscribe`，但未在本 Connector 中验证。可选事件 `lody.capability.published`（`agentConfigId`、可选 `modes/models` 标识）放在阶段 4，先用探测确认 flock 事件在本地与云端模式都可用 |
+| capability 行发布时机 | 带 `modeId`/`modelId`/`configOptionValues` 的输入在 capability 发布前被 `unsupported_capability` 拒绝；发布发生在守护进程首次运行 Agent 之后 | 阶段 4 已实现 `lody.capability.published`，依据见[阶段 4 的证据](#阶段-4-的证据) |
 
 ## 现有消费者受到的影响
 
@@ -222,6 +222,7 @@
 - **心跳事件量**：阶段 1 测量没有发现心跳型 patch（见[心跳测量](#心跳测量)），因此不丢弃也不合并。真实 provider 的流式输出可能产生更多 `history.updated`；这一点未用真实 provider 测量，Relay 每订阅 64 条上限仍会在极端情况下触发 `delivery_capacity` 重同步。
 - **派生事件被误读为业务结论**：`pending`/`resolved` 只陈述原生请求状态，文档须写明不代表任务成功或被 provider 消费。
 - **观察规则依赖元数据状态**：若 daemon 在某些路径上不更新 `status`，活跃判断会漏；用 `latestUserMsgId` 变化和读取租约兜底。阶段 2 用 mock ACP 覆盖 `running → requestPermission → idle`，云端协议 fixture 覆盖元数据缺失。
+- **观察开启窗口**：Session 变为活跃到其历史文档打开之间到达的 turn 属于初始快照，不产生 `history.updated`（由阶段 4 的完整验证中并发测试暴露）。待处理请求不受影响，打开时会扫描并宣告；其余内容靠 `doc-metadata` 唤醒后读取。已写入用户文档。
 - **云端事件范围**：包含工作区内所有 Session 的元数据事件，含其他机器的，与 `list` 范围一致但事件量更大。观察名额只用于活跃 Session，仍可能触顶。
 - **自动批准边界**：重连后 `unknown` 使 full-access Session 的权限请求变成需要消费者处理。这比静默停住更安全，但是行为变化，需写入文档。
 - **云端协议没有生产验收**：云端部分只有 loro-repo/Loro Streams fixture 证据。
@@ -243,17 +244,18 @@
 - `lody.interaction.pending/resolved`、自动批准结果证据、steer requeue 的 turn 关联。
 - 测试：mock ACP 的 `NEEDS_PERMISSION` 在显式策略下发 `pending`，在 full-access 下不发 `pending` 但有 `resolved`；问题类（`_meta`）总是 `pending`；Relay 集成测试 `nativeTypes: ["lody.interaction.pending"]` 的 webhook 过滤；steer 返回的 `userTurnId` 能在 `history.updated` 中找到。
 
-**阶段 4（可选，需确认）：** `lody.capability.published`；`lody.sessions.history` 的 `afterTurnId`。测试：flock 订阅探测；大历史尾部读取成本。
+**阶段 4：** `lody.capability.published`；`lody.sessions.history` 的 `afterTurnId`。已实现，见下文。
 
 ## 实现状态与验证
 
-阶段 1–3 已实现（本地提交，未推送）。
+阶段 1–4 已实现。
 
 | 阶段 | 内容 | 主要代码 | 测试 |
 | --- | --- | --- | --- |
 | 1 事件内容 | `native.agenvo` 身份；截断保留读取目标；`onGap` 带 `sessionId`，重同步带 `scope`；顺序化发布（元数据查询后再发出，修正了本地模式异步过滤可能乱序） | [`events.ts`](../apps/lody/src/events.ts)、[`workspace.ts`](../apps/lody/src/workspace.ts) | `tests/lody.test.ts`（超大 turn 与元数据截断、重同步 scope）；`tests/system/lody-agents.test.ts`（真实 `lody@0.104.0` 守护进程加 mock ACP：每个事件的 `agentConfigId`/`turnId`） |
 | 2 观察与读取分离 | `isActive` 驱动的自动观察、宽限期释放、读取租约与 LRU 驱逐、容量事件、移除 `lody.sessions.subscribe` | `workspace.ts`（`entry`/`use`/`observe`） | `tests/lody-events.test.ts`（无订阅调用即收事件、宽限期释放、重连后恢复观察、130 个 Session 读取不触顶、128 活跃时的 `observation_capacity` 与 `resource_exhausted`） |
 | 3 交互事件 | `lody.interaction.pending/resolved`、自动批准结果证据、`permissionHandling: unknown` 的请求不静默停住 | `workspace.ts`（`scan`/`announce`/`resolved`） | `tests/lody-events.test.ts`（重连后宣告、他人回应、超大请求）、`tests/lody-agents.test.ts`（自动批准只有 `resolved`，显式策略与问题类有 `pending`）、`tests/system/lody-agents.test.ts`（真实守护进程的 `pending`/`resolved` 与 steer 的 `userTurnId` 关联）、`tests/integration/lody.test.ts`（Relay webhook 按 `nativeTypes` 过滤） |
+| 4 capability 与续读 | `lody.capability.published`（flock 订阅，去重）；`afterTurnId` | `workspace.ts`（`watchCapabilities`）、[`events.ts`](../apps/lody/src/events.ts)（`capabilityEventData`）、`lody.ts`（`page`）、`protocol.ts`（`turnPosition`） | `tests/lody-events.test.ts`（发布一次、拒绝后可重试、续读与并发编辑、回应只报告一次）、`tests/system/lody-agents.test.ts`（真实守护进程的发布事件与 `afterTurnId`）、`tests/integration/lody.test.ts`（Relay 按 `nativeTypes` 过滤） |
 
 实现中与设计不同或新增的细节：
 
@@ -263,13 +265,44 @@
 - **`respond` 的本地写入不触发 `history.updated`**（Loro 本地提交事件被跳过），所以 `lody.interaction.resolved` 同时承担这次回应的证据。
 - **`pendingInteractions` 先看 turn 的 `finished` 再物化**：每次历史变化都会扫描，避免对大历史做 O(N) 的 JSON 物化。
 - **宽限期**：`observation.graceMs`（默认 30 秒）是模块级常量，测试缩短它，不是配置项。
-- **本期未做**：`lody.capability.published` 与 `lody.sessions.history` 的 `afterTurnId`（阶段 4，待用户确认）；真实 provider、云端生产环境和 ChatGPT 客户端的验收。
+- **本期未做**：真实 provider、云端生产环境和 ChatGPT 客户端的验收。
 - **已知限制**：长期停留在 `running` 的僵尸 Session（机器崩溃但元数据未更新）会占用观察名额，直到状态改变；128 个这样的 Session 会使新 Session 无法观察并触发 `observation_capacity` 事件。
+
+### 阶段 4 的证据
+
+**capability 发布可以可靠观察。** 在固定 `lody@0.104.0` 守护进程上，Connector 对机器 flock 文档调用 `flock.subscribe`（与读取 capability 行用的是同一份文档）：
+
+| 步骤 | 订阅收到的批次 |
+| --- | --- |
+| 对等端写入 `agentConfig/acp` | `agentConfig/acp` 一条（来源 `import_json`） |
+| 创建 Session 并首次发送（守护进程首次运行 Agent） | `acpCapability/acp` 一条，值含 `modes: [default, yolo]`，约 1.3 秒 |
+| 再创建一个 Session 并发送 | `acpCapability/acp` **再次**写入，值相同 |
+
+所以“发布”在原生层面是行写入，守护进程每次探测都会重写。事件契约因此是“行首次出现或内容改变”，不是“每次写入”：
+
+- `lody.capability.published`：`native = {capability: <原生行>, agenvo: {agentConfigId, agentType, cliType, machineId, read: {method: "lody.catalog", machineId}}}`。没有 `threadId`（配置属于机器，不属于 Session），所以 `threadId` 过滤会排除它，用 `nativeTypes` 过滤。超过 24KB 时 `capability` 缩减为 mode、model、option 标识并带 `truncated`、`omittedBytes`。
+- 去重：机器文档追上同步时已存在的行记为已知，不通知；内容相同的重写不通知；行被删除只清除已知记录，不通知；删除后再次出现算新发布。
+- 观察范围：本地模式始终监视所连接的机器。云端模式在 `machine()` 第一次打开某台机器的 flock 时开始监视，也就是 `lody.catalog`、`lody.sessions.create`、`lody.sessions.send` 触及过的机器；从未打开的机器不监视，不为此打开全部机器的房间（每个房间占用连接资源）。因为被 `unsupported_capability` 拒绝的发送必然已经打开过那台机器，“被拒绝后等待可重试”的场景总在监视范围内。
+- 事件到达表示可以重试；选择仍然对照新行校验，未知 mode 依然是 `invalid_params`。
+
+没有使用轮询或定时重试。
+
+**`afterTurnId` 语义。**
+
+- `lody.sessions.history({sessionId, afterTurnId, limit?})` 返回当前原生顺序里该 turn 之后的 turn，不含该 turn；读取该 turn 本身用 `lody.sessions.turn`。
+- 每次调用都按 ID 重新定位（从最新向前查），所以不依赖旧游标，更早的 turn 被插入或删除后仍指向同一个 turn。
+- 未知 ID（从未存在或已被原生编辑删除）：`not_found`。不回退到从头读取，因为那会让消费者误以为自己已经追上。
+- 与 `cursor` 同时传入：`invalid_params`。
+- 位于最新 turn 之后：空列表，没有 `nextCursor`。
+- 返回的 `nextCursor` 是普通游标（绝对位置加上一个 turn 的 ID），并发移动后返回 `invalid_cursor`，消费者用同一个 `afterTurnId` 重新读取即可。没有为此新增 `expectedHash`：`afterTurnId` 读取的是调用时刻的快照，一致性检测由 `nextCursor` 负责；整轮正文的一致性仍由 `lody.sessions.turn` 的 `expectedHash` 负责。
+- 云端与本地读取同一份 Loro 文档，行为一致；没有按模式分叉的路径。
+
+**阶段 3 补丁。** 阶段 4 的系统测试暴露了一个阶段 3 的竞态：回应上传尚未确认时守护进程已经处理，非本地事件触发扫描先发出不带 `resolvedBy` 的 `lody.interaction.resolved`，随后回应路径再发一条带 `agenvo_respond` 的，造成重复且归因不稳。现在回应写入后立即记录回应者，每个请求只报告一次。
 
 ## 决定记录
 
 1. **`lody.sessions.subscribe` 的处理。** 已决定：删除（选项 A），标注破坏性变更。
 2. **是否新增派生事件 `lody.interaction.pending/resolved`。** 已决定：新增，因为 Relay 只能按原生类型过滤；替代方案是只用 `doc-metadata`，消费者自己过滤，代价是每次状态变化都唤醒一次。
 3. **身份放在 `native.agenvo` 还是扩展 `runtimeEvent` 顶层。** 已决定：前者（不改共享协议，不影响 Herdr/Codex）；后者能让所有 Connector 受益，但改变 Relay 与 SDK 契约。
-4. **`lody.sessions.history` 的 `afterTurnId`**：留到阶段 4，阶段 1–3 不需要它。
+4. **`lody.sessions.history` 的 `afterTurnId`**：已在阶段 4 实现。
 5. **心跳 patch 的抑制规则**：已由阶段 1 实测决定，不抑制，见[心跳测量](#心跳测量)。

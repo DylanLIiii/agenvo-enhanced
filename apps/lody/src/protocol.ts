@@ -235,3 +235,13 @@ export function permissionOutcomeOf(
         return item.permissionRequest.outcome ?? undefined;
   }
 }
+
+/** Position of a native turn by identity, searching from the newest turn. */
+export function turnPosition(doc: LoroDoc, turnId: string) {
+  const list = doc.getList("history");
+  for (let i = list.length - 1; i >= 0; i--) {
+    const raw = list.get(i);
+    if (isContainer(raw) && (raw as LoroMap).get("id") === turnId) return i;
+  }
+  return -1;
+}
