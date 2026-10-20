@@ -18,6 +18,7 @@ import {
   readTurn,
   pendingInteractions,
 } from "./protocol.js";
+import { truncatedTurn } from "./events.js";
 import { LodyWorkspace } from "./workspace.js";
 
 const pagination = {
@@ -253,6 +254,7 @@ export class LodyAdapter implements Adapter {
       this.onAvailabilityChange?.();
       this.emit("agenvo.resync_required", undefined, {
         reason: `${this.config.mode}_disconnected`,
+        scope: "workspace",
       });
       void workspace.close().finally(() => {
         if (!this.stopped)
@@ -261,9 +263,12 @@ export class LodyAdapter implements Adapter {
           }, 1000);
       });
     };
-    workspace.onGap = () => {
+    workspace.onGap = (sessionId) => {
       this.emit("agenvo.resync_required", undefined, {
         reason: `${this.config.mode}_sync_gap`,
+        ...(sessionId
+          ? { scope: "session", sessionId }
+          : { scope: "workspace" }),
       });
     };
     workspace.onEvent = (type, id, native) => {
@@ -321,19 +326,7 @@ export class LodyAdapter implements Adapter {
       const turn = readTurn(doc, position);
       const length = bytes(turn);
       if (size + length > 32 * 1024 && items.length) break;
-      items.push(
-        length > 32 * 1024
-          ? {
-              id: turn.id,
-              role: turn.role,
-              status: turn.status,
-              finished: turn.finished,
-              endedAt: turn.endedAt,
-              truncated: true,
-              omittedBytes: length,
-            }
-          : turn,
-      );
+      items.push(length > 32 * 1024 ? truncatedTurn(turn, length) : turn);
       size += Math.min(length, 32 * 1024);
       position++;
     }
@@ -406,14 +399,7 @@ export class LodyAdapter implements Adapter {
       threadId,
       generation: this.generation,
       nativeType,
-      native:
-        bytes(native) <= 24 * 1024
-          ? native
-          : {
-              sessionId: threadId,
-              truncated: true,
-              omittedBytes: bytes(native),
-            },
+      native,
     };
     for (const listener of this.listeners) listener(event);
   }

@@ -284,7 +284,12 @@ test(
     };
     const session = (await call("lody.sessions.list")).items[0];
     const events: string[] = [];
-    adapter.watchEvents((event) => events.push(event.nativeType));
+    const resyncs: any[] = [];
+    adapter.watchEvents((event) => {
+      events.push(event.nativeType);
+      if (event.nativeType === "agenvo.resync_required")
+        resyncs.push(event.native);
+    });
     await call("lody.sessions.subscribe", { sessionId: session.id });
     await call("lody.sessions.send", {
       sessionId: session.id,
@@ -307,6 +312,7 @@ test(
       15000,
     );
     assert.ok(events.includes("agenvo.resync_required"));
+    assert.ok(resyncs.some((r) => r.scope === "workspace"));
     const fresh = (await call("lody.sessions.list")).items[0];
     assert.equal(fresh.id, session.id);
     await call("lody.sessions.subscribe", { sessionId: fresh.id });
@@ -381,6 +387,8 @@ test(
     const adapter = new LodyAdapter(fixture.config);
     t.after(() => adapter.close());
     await adapter.init();
+    const seen: any[] = [];
+    adapter.watchEvents((event) => seen.push(event));
     const result = await adapter.call("lody.sessions.send", {
       sessionId: "external1",
       text: "Uses config options",
@@ -410,6 +418,45 @@ test(
       },
       (text) => text.includes('"truncated":true'),
     );
+    // An oversized event keeps identity and a deterministic read target.
+    const big = await until(
+      async () =>
+        seen.find(
+          (e) => e.nativeType === "history.updated" && e.native.truncated,
+        ),
+      Boolean,
+    );
+    assert.equal(big.threadId, "external1");
+    assert.equal(big.native.turn.id, "assistant1");
+    assert.equal(big.native.turn.truncated, true);
+    assert.equal(big.native.agenvo.agentConfigId, "config1");
+    assert.equal(big.native.agenvo.turnId, "assistant1");
+    assert.deepEqual(big.native.agenvo.read, {
+      method: "lody.sessions.turn",
+      sessionId: "external1",
+      turnId: "assistant1",
+    });
+    assert.equal(big.native.agenvo.permissionHandling, "auto_approve_plain");
+    await fixture.repo.upsertDocMeta("session-external1", {
+      status: { type: "requestPermission" },
+      awaitingUserSince: 1,
+      note: "x".repeat(30000),
+    });
+    const meta = await until(
+      async () =>
+        seen.find((e) => e.nativeType === "doc-metadata" && e.native.truncated),
+      Boolean,
+    );
+    assert.equal(meta.native.patch.status.type, "requestPermission");
+    assert.equal(meta.native.patch.awaitingUserSince, 1);
+    assert.deepEqual(meta.native.omittedKeys, ["note"]);
+    assert.equal(meta.native.agenvo.read.method, "lody.sessions.get");
+    assert.equal(meta.native.agenvo.agentConfigId, "config1");
+    await fixture.repo.upsertDocMeta("session-external1", {
+      status: { type: "idle" },
+      awaitingUserSince: null,
+      note: undefined,
+    });
     const first = (
       await adapter.call("lody.sessions.turn", {
         sessionId: "external1",

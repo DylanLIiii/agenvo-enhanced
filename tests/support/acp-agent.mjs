@@ -70,6 +70,24 @@ async function handle(id, method, params) {
       return { configOptions: configOptions() };
     case "session/prompt": {
       const text = params.prompt?.map((p) => p.text ?? "").join("") ?? "";
+      // LONG_RUN<ms> keeps the turn running so tests can observe long executions.
+      const long = /LONG_RUN(\d+)/.exec(text);
+      // It streams a chunk every two seconds while running.
+      if (long)
+        for (let left = Number(long[1]); left > 0; left -= 2000) {
+          await new Promise((r) => setTimeout(r, Math.min(2000, left)));
+          write({
+            jsonrpc: "2.0",
+            method: "session/update",
+            params: {
+              sessionId: params.sessionId,
+              update: {
+                sessionUpdate: "agent_message_chunk",
+                content: { type: "text", text: "." },
+              },
+            },
+          });
+        }
       let permission;
       if (text.includes("NEEDS_PERMISSION")) {
         permission = await ask("session/request_permission", {

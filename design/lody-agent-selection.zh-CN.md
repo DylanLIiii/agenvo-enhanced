@@ -128,7 +128,7 @@ Lody Agent Role（`agent-role list/get`，可覆盖手工配置）是另一条�
 
 | 缺口 | 证据 | 影响 |
 | --- | --- | --- |
-| 只有 `history.updated` 一种业务事件 | 文档订阅回调只处理 `history` 路径（[workspace.ts:376](../apps/lody/src/workspace.ts#L381)）；Session 元数据、状态、机器 capability 变化不发事件 | 权限请求出现只能从 `history.updated.turn` 内的 `permissionRequest` 推断 |
+| 文档订阅回调只发 `history.updated`；Session 元数据由 `repo.watch` 以原生 `doc-metadata` 发出，机器 capability 变化不发事件 | 文档订阅回调只处理 `history` 路径（[workspace.ts:477](../apps/lody/src/workspace.ts#L477)）；元数据事件见 [workspace.ts:197](../apps/lody/src/workspace.ts#L197)。本表此行在阶段 3 调查后更正，见[Lody 事件流设计](lody-events.zh-CN.md) | 状态与待处理权限（`status: requestPermission`）已有原生证据，但没有 Agenvo 身份说明，也无法按类型过滤“需要输入” |
 | 超过 24KB 的事件被替换成 `{sessionId, truncated, omittedBytes}`，丢失 turn 标识 | `emit`（[lody.ts:387](../apps/lody/src/lody.ts#L397)） | 工具输出更长的 provider 更易触发；消费者不知道是哪一轮 |
 | 事件没有 agent 标识 | `native` 只含 `turn`；`threadId` 是 Session | 消费者无法按 provider 解读轮次形态，需再读 Session 元数据 |
 | 文档订阅数上限 128 且永不驱逐 | `docs.size >= 128`（[workspace.ts:362](../apps/lody/src/workspace.ts#L362)）；`docs` 仅失败时删除，`history`、`turn`、`interactions` 都经 `document()` 打开 | 读取历史也占名额；Session 变多后更早触顶 |
@@ -177,7 +177,7 @@ Lody Agent Role（`agent-role list/get`，可覆盖手工配置）是另一条�
 
 **阶段 2：`_permission` 类选项。** Grok `permission_mode=always-approve`、Kimi `permission_mode=yolo` 的识别与写入，基于阶段 0 的 capability 形态；无法在隔离环境运行真实 provider 的，只做 capability fixture 级覆盖，并在文档标明未经真实执行验收。
 
-**阶段 3：事件流缺口。** 单独设计，见事件流含义一节。
+**阶段 3：事件流缺口。** 设计见[Lody 事件流设计](lody-events.zh-CN.md)（待确认，未实现）：Lody 已走共享的 `runtime.changed` 路径，`lody.sessions.subscribe` 只是打开文档；方案是补全事件契约并把观察与读取分离。
 
 事件流设计原则（用户已确认）：事件的读者是接收事件的 Agent，不是人类操作员，也不是只转发的 webhook 消费者。判断标准是接收 Agent 能否仅凭事件本身理解发生了什么并决定下一步，即事件携带足够的身份和原生证据（“拿到即可理解并行动”）。
 

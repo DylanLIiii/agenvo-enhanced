@@ -6,6 +6,7 @@ import { Fault } from "@agenvo/protocol";
 import type { LodyConfig } from "./config.js";
 import { CloudConnection } from "./cloud.js";
 import { LocalConnection } from "./local.js";
+import { sessionEventData, type PermissionHandling } from "./events.js";
 import type { LodyConnection } from "./connection.js";
 import {
   appendUserTurn,
@@ -160,7 +161,8 @@ export class LodyWorkspace {
       room: RepoRoomSubscription;
     }>
   >();
-  private controlled = new Set<string>();
+  private policies = new Map<string, PermissionHandling>();
+  private publishing: Promise<void> = Promise.resolve();
   private responding = new Set<string>();
   private closed = false;
   private off?: () => void;
@@ -169,7 +171,7 @@ export class LodyWorkspace {
     sessionId: string | undefined,
     native: Record<string, unknown>,
   ) => void;
-  onGap?: () => void;
+  onGap?: (sessionId?: string) => void;
   onAvailability?: (available: boolean) => void;
   onDisconnect?: () => void;
   constructor(readonly config: LodyConfig) {
@@ -201,17 +203,49 @@ export class LodyWorkspace {
         event.docId.startsWith("session-comment-")
       )
         return;
-      if (this.config.mode === "local") {
-        const machineId = this.config.machineId;
-        void this.repo
-          .getDocMeta(event.docId)
-          .then((row) => {
-            if (!this.closed && row?.meta.machineId === machineId)
-              this.onEvent?.(event.kind, event.docId.slice(8), { ...event });
-          })
-          .catch(() => this.onGap?.());
-      } else this.onEvent?.(event.kind, event.docId.slice(8), { ...event });
+      this.publish(event.kind, event.docId.slice(8), { ...event }, true);
     }).unsubscribe;
+  }
+  /**
+   * Publish one Session event in arrival order with the Session's current
+   * identity. Local attachment only reports Sessions of its own machine.
+   */
+  private publish(
+    type: string,
+    id: string,
+    native: Record<string, unknown>,
+    watched = false,
+    turnId?: string,
+  ) {
+    this.publishing = this.publishing.then(async () => {
+      if (this.closed) return;
+      let meta: Record<string, any> | undefined;
+      try {
+        meta = (await this.repo.getDocMeta(`session-${id}`))?.meta;
+      } catch {
+        this.onGap?.(id);
+        return;
+      }
+      if (
+        watched &&
+        this.config.mode === "local" &&
+        meta?.machineId !== this.config.machineId
+      )
+        return;
+      if (this.closed) return;
+      this.onEvent?.(
+        type,
+        id,
+        sessionEventData(type, id, native, {
+          meta,
+          turnId,
+          permissionHandling: this.permissionHandling(id),
+        }),
+      );
+    });
+  }
+  private permissionHandling(id: string): PermissionHandling {
+    return this.policies.get(id) ?? "unknown";
   }
   private async caughtUp(room: RepoRoomSubscription) {
     if (this.closed) throw new Fault("runtime_unavailable");
@@ -472,7 +506,7 @@ export class LodyWorkspace {
         const statusOff = room
           .subscription(this.mode)
           .onStatusChange((status) => {
-            if (status !== "joined") this.onGap?.();
+            if (status !== "joined") this.onGap?.(id);
           });
         const off = doc.subscribe((event) => {
           if (event.by === "local") return;
@@ -486,21 +520,21 @@ export class LodyWorkspace {
           }
           const count = doc.getList("history").length;
           if (structural) {
-            if (count > 50) this.onGap?.();
+            if (count > 50) this.onGap?.(id);
             for (let i = Math.max(0, count - 50); i < count; i++)
               positions.add(i);
           }
           for (const index of positions) {
             if (index >= count) continue;
             try {
-              this.onEvent?.("history.updated", id, {
-                turn: readTurn(doc, index),
-              });
+              const turn = readTurn(doc, index);
+              this.publish("history.updated", id, { turn }, false, turn.id);
             } catch {
-              this.onGap?.();
+              this.onGap?.(id);
             }
           }
-          if (this.controlled.has(id)) void this.approvePermissions(id, doc);
+          if (this.policies.get(id) === "auto_approve_plain")
+            void this.approvePermissions(id, doc);
         });
         return {
           doc,
@@ -558,8 +592,10 @@ export class LodyWorkspace {
     };
     // Automatic approval of plain execution permissions follows this turn's
     // policy; a Session that moves to an explicit or native-default policy stops.
-    if (autoApprove) this.controlled.add(session.id);
-    else this.controlled.delete(session.id);
+    this.policies.set(
+      session.id,
+      autoApprove ? "auto_approve_plain" : "explicit",
+    );
     try {
       doc.getMap("session").set("id", session.id);
       appendUserTurn(doc, {

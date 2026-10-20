@@ -1,0 +1,102 @@
+import { bytes } from "@agenvo/protocol";
+import type { Turn } from "./protocol.js";
+
+/** Native data above this size is reduced to identity plus a read target. */
+export const EVENT_LIMIT = 24 * 1024;
+
+/** How this Connector process treats permission requests of a Session. */
+export type PermissionHandling = "auto_approve_plain" | "explicit" | "unknown";
+
+/** Turn form shared by history reads and oversized events. */
+export function truncatedTurn(turn: Turn, omittedBytes: number) {
+  return {
+    id: turn.id,
+    role: turn.role,
+    status: turn.status,
+    finished: turn.finished,
+    endedAt: turn.endedAt,
+    truncated: true,
+    omittedBytes,
+  };
+}
+
+// Small metadata fields that decide what a consumer reads next.
+const keptPatchKeys = [
+  "status",
+  "awaitingUserSince",
+  "processingUserMsgId",
+  "lastHandledUserMsgId",
+  "isArchived",
+];
+
+/**
+ * Add Agenvo identity to native event data without touching native fields, then
+ * bound the result. Identity and a deterministic read target always survive.
+ */
+export function sessionEventData(
+  type: string,
+  sessionId: string,
+  native: Record<string, any>,
+  options: {
+    meta?: Record<string, any>;
+    turnId?: string;
+    permissionHandling: PermissionHandling;
+  },
+): Record<string, unknown> {
+  const meta = options.meta ?? {};
+  const patch = native.patch;
+  const turnId =
+    options.turnId ??
+    [patch?.processingUserMsgId, patch?.lastHandledUserMsgId].find(
+      (id) => typeof id === "string",
+    );
+  const agenvo: Record<string, unknown> = {
+    sessionId,
+    ...(typeof meta.agentConfigId === "string"
+      ? { agentConfigId: meta.agentConfigId }
+      : {}),
+    ...(typeof meta.agentType === "string"
+      ? { agentType: meta.agentType }
+      : {}),
+    ...(typeof meta.cliType === "string" ? { cliType: meta.cliType } : {}),
+    ...(typeof meta.machineId === "string"
+      ? { machineId: meta.machineId }
+      : {}),
+    ...(turnId ? { turnId } : {}),
+    permissionHandling: options.permissionHandling,
+  };
+  const full = { ...native, agenvo };
+  const size = bytes(full);
+  if (size <= EVENT_LIMIT) return full;
+  const base = { truncated: true, omittedBytes: size };
+  if (native.turn && typeof native.turn.id === "string")
+    return {
+      ...base,
+      turn: truncatedTurn(native.turn, bytes(native.turn)),
+      agenvo: {
+        ...agenvo,
+        turnId: native.turn.id,
+        read: {
+          method: "lody.sessions.turn",
+          sessionId,
+          turnId: native.turn.id,
+        },
+      },
+    };
+  if (patch && typeof patch === "object")
+    return {
+      kind: native.kind,
+      docId: native.docId,
+      by: native.by,
+      ...base,
+      patch: Object.fromEntries(
+        keptPatchKeys.filter((k) => k in patch).map((k) => [k, patch[k]]),
+      ),
+      omittedKeys: Object.keys(patch).filter((k) => !keptPatchKeys.includes(k)),
+      agenvo: { ...agenvo, read: { method: "lody.sessions.get", sessionId } },
+    };
+  return {
+    ...base,
+    agenvo: { ...agenvo, read: { method: "lody.sessions.get", sessionId } },
+  };
+}

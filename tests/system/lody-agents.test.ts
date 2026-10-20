@@ -55,6 +55,8 @@ test(
       assert.equal(result.error, undefined, JSON.stringify(result));
       return result.result as any;
     };
+    const events: any[] = [];
+    adapter.watchEvents((event) => events.push(event));
     const requests = async () =>
       (await readFile(log, "utf8").catch(() => ""))
         .split("\n")
@@ -129,6 +131,34 @@ test(
       (r) => r.items.length === 1,
       30000,
     );
+    // Every event of the Session tells a receiving Agent which configuration
+    // produced it, which turn it concerns and how permissions are handled,
+    // without a prior subscribe call.
+    const own = events.filter((e) => e.threadId === guarded);
+    assert.ok(own.length > 0);
+    for (const e of own) {
+      assert.equal(e.native.agenvo.sessionId, guarded);
+      assert.equal(e.native.agenvo.agentConfigId, "acp");
+      assert.equal(e.native.agenvo.cliType, "custom");
+      assert.equal(e.native.agenvo.machineId, config.machineId);
+    }
+    const waiting = await until(
+      async () =>
+        events.find(
+          (e) =>
+            e.threadId === guarded &&
+            e.nativeType === "doc-metadata" &&
+            e.native.patch?.status?.type === "requestPermission",
+        ),
+      Boolean,
+    );
+    assert.equal(waiting.native.agenvo.permissionHandling, "explicit");
+    const asked = own.find(
+      (e) =>
+        e.nativeType === "history.updated" &&
+        JSON.stringify(e.native.turn).includes("permissionRequest"),
+    );
+    assert.equal(asked.native.agenvo.turnId, pending.items[0].turnId);
     await new Promise((resolve) => setTimeout(resolve, 1500));
     assert.equal(
       (await call("lody.interactions.list", { sessionId: guarded })).items
