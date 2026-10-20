@@ -51,7 +51,7 @@ test(
         events.find(
           (e) => e.nativeType === "history.updated" && e.native.turn.id,
         ),
-      Boolean,
+      (value) => Boolean(value),
     );
     assert.equal(turn.native.agenvo.agentConfigId, "config1");
 
@@ -106,7 +106,7 @@ test(
               e.nativeType === "history.updated" &&
               e.native.turn.id === "assistant2",
           ),
-      Boolean,
+      (value) => Boolean(value),
       10000,
     );
   },
@@ -161,7 +161,7 @@ test(
             e.nativeType === "agenvo.resync_required" &&
             e.native.reason === "observation_capacity",
         ),
-      Boolean,
+      (value) => Boolean(value),
     );
     assert.equal(lost.native.scope, "session");
     assert.equal(lost.native.sessionId, ids[128]);
@@ -215,7 +215,7 @@ test(
     const pending = await until(
       async () =>
         events.find((e) => e.nativeType === "lody.interaction.pending"),
-      Boolean,
+      (value) => Boolean(value),
       10000,
     );
     assert.equal(pending.native.agenvo.permissionHandling, "unknown");
@@ -237,7 +237,7 @@ test(
     const resolved = await until(
       async () =>
         events.find((e) => e.nativeType === "lody.interaction.resolved"),
-      Boolean,
+      (value) => Boolean(value),
       10000,
     );
     assert.equal(resolved.native.requestId, "plain1");
@@ -261,7 +261,7 @@ test(
     await setStatus(fixture, "external1", "running");
     await until(
       async () => (adapter.connected() as any).docs.get("external1")?.observed,
-      Boolean,
+      (value) => Boolean(value),
     );
     await fixture.assistant("external1", {
       finished: false,
@@ -274,7 +274,7 @@ test(
           (e) =>
             e.nativeType === "lody.interaction.pending" && e.native.truncated,
         ),
-      Boolean,
+      (value) => Boolean(value),
       10000,
     );
     assert.equal(pending.native.requestId, "question1");

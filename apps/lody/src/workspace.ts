@@ -983,7 +983,10 @@ export class LodyWorkspace {
       if (!this.autoEligible(request) || this.responding.has(key)) continue;
       this.responding.add(key);
       try {
-        const outcome = { outcome: "selected", optionId: option.optionId };
+        const outcome = {
+          outcome: "selected" as const,
+          optionId: option.optionId,
+        };
         await this.respond(
           {
             sessionId: id,

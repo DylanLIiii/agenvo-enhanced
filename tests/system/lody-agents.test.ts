@@ -150,7 +150,7 @@ test(
             e.nativeType === "doc-metadata" &&
             e.native.patch?.status?.type === "requestPermission",
         ),
-      Boolean,
+      (value) => Boolean(value),
     );
     assert.equal(waiting.native.agenvo.permissionHandling, "explicit");
     const asked = own.find(
@@ -182,7 +182,7 @@ test(
             e.nativeType === "history.updated" &&
             e.native.turn.id === steered.userTurnId,
         ),
-      Boolean,
+      (value) => Boolean(value),
     );
     assert.equal(steered.disposition, "unsupported");
     assert.equal(steered.recoveryOwned, true);

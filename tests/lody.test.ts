@@ -89,7 +89,7 @@ test(
     const request = interactions.items[0];
     await until(
       async () => events.includes("lody.interaction.pending"),
-      Boolean,
+      (value) => Boolean(value),
     );
     await call("lody.interactions.respond", {
       sessionId,
@@ -426,7 +426,7 @@ test(
         seen.find(
           (e) => e.nativeType === "history.updated" && e.native.truncated,
         ),
-      Boolean,
+      (value) => Boolean(value),
     );
     assert.equal(big.threadId, "external1");
     assert.equal(big.native.turn.id, "assistant1");
@@ -447,7 +447,7 @@ test(
     const meta = await until(
       async () =>
         seen.find((e) => e.nativeType === "doc-metadata" && e.native.truncated),
-      Boolean,
+      (value) => Boolean(value),
     );
     assert.equal(meta.native.patch.status.type, "requestPermission");
     assert.equal(meta.native.patch.awaitingUserSince, 1);

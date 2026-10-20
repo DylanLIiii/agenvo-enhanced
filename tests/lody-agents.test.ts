@@ -230,7 +230,7 @@ test(
           (e) =>
             e.threadId === full && e.nativeType === "lody.interaction.resolved",
         ),
-      Boolean,
+      (value) => Boolean(value),
     );
     assert.equal(approved.native.resolvedBy, "agenvo_auto_approve");
     assert.equal(approved.native.outcome.optionId, "allow");
