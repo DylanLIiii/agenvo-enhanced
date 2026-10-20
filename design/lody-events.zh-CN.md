@@ -208,7 +208,7 @@
 | 对象 | 变化 |
 | --- | --- |
 | `events/subscribe` 订阅格式 | 不变。`deviceId/instanceId/serviceId/threadId/nativeTypes` 与 `runtime.changed` 定义不变，Relay 无改动 |
-| `nativeTypes: ["history.updated"]` 或 `["doc-metadata"]` 的订阅 | 继续收到同名事件；`native` 追加 `agenvo` 键；`doc-metadata` 少了仅含心跳字段的事件；不再需要先调用订阅。新增类型不会被已有 allowlist 收到 |
+| `nativeTypes: ["history.updated"]` 或 `["doc-metadata"]` 的订阅 | 继续收到同名事件；`native` 追加 `agenvo` 键；不再需要先调用订阅。新增类型不会被已有 allowlist 收到 |
 | 不带 `nativeTypes` 的订阅 | 额外收到 `lody.interaction.*`，并且不调用订阅也能收到活跃 Session 的 `history.updated` |
 | 依赖 `{sessionId, truncated, omittedBytes}` 形态的消费者 | 超 24KB 事件形态改变（见截断语义） |
 | `lody.sessions.subscribe` | 已删除（0.2.0 起的破坏性变更）：调用返回 `unsupported_capability`；迁移方式是删除调用，MCP 订阅不变 |
