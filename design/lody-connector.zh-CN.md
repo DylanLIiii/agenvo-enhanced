@@ -64,7 +64,7 @@ CLI token 拥有其账号的访问能力；绑定一个 workspace 是 Agenvo 的
 
 **观察与交互。** presence 是短期在线状态，过期或尚未同步应保持 unknown。历史中的原生 turn 结果保留身份和错误，不能只用最新 idle 状态替代。文档更新通过 MCP events 投递，完整历史按需读取；不维护第二套观察日志。权限回应通过原生文档命令写入，仍需验证目标机器消费结果及其他客户端已回应时的行为。
 
-**执行权限。** 新建或由 Agenvo 管理的输入路径按项目要求使用 full access，但配置必须来自具体 provider 的原生能力，不能套用一个通用 mode ID 或自动回答所有问题。账号和机器访问授权继续由 Lody 校验。Connector 退出不隐式取消 Session 或停止执行机器。
+**执行权限。** 输入路径对声明了原生 full-access 设置的内置 provider（Codex、Claude、DeepSeek、Kimi）默认使用 full access；其余配置沿用原生默认，调用者可显式选择 mode 与选项。配置必须来自具体 provider 的原生能力，不能套用一个通用 mode ID 或自动回答所有问题，详见 [Lody 多 Agent 配置选择](lody-agent-selection.zh-CN.md)。账号和机器访问授权继续由 Lody 校验。Connector 退出不隐式取消 Session 或停止执行机器。
 
 来源：[创建与首次输入](https://github.com/LodyAI/Lody/blob/3d4787114477cf305a965da471705c8b883fa0c1/packages/components/src/lib/session-submission.ts)、[写入与派发](https://github.com/LodyAI/Lody/blob/3d4787114477cf305a965da471705c8b883fa0c1/packages/components/src/lib/session-send-delivery.ts)、[交互回应写入](https://github.com/LodyAI/Lody/blob/3d4787114477cf305a965da471705c8b883fa0c1/packages/components/src/providers/workspace-writer-impl.ts)、[presence](https://github.com/LodyAI/Lody/blob/3d4787114477cf305a965da471705c8b883fa0c1/packages/components/src/providers/workspace-presence-transport.ts)、[执行生命周期](https://github.com/LodyAI/Lody/blob/3d4787114477cf305a965da471705c8b883fa0c1/apps/cli/src/session/session-execution-service.ts)。
 
