@@ -62,7 +62,7 @@ Paseo 有相同形态的闸门（[paseo.ts:24,57](../apps/paseo/src/paseo.ts#L24
 | claude | `auto` | mode `bypassPermissions` | `CLAUDE_STATIC_MODES`（L5745）；仅代码，无系统测试 |
 | deepseek | `workspace-write` | mode `danger-full-access`，位于 `category: "mode"` 的选项 | `DEEPSEEK_HARNESS_PERMISSION_PRESETS`（`chunks/acp-*.js`）与 L5610-5625。与 Codex 的旧 id 相同，现有识别逻辑即可命中 |
 | grok | `default` | 配置项 `permission_mode = always-approve`，category 为 `_permission`，**不是 mode** | L5942。守护进程对 Grok 在该值下自动批准工具权限（`getBuiltinToolPermissionOutcome`，L210894） |
-| kimi | `auto` | 配置项 `permission_mode = yolo`，category 为 `_permission` | `KIMI_STATIC_MODES`（L5891）与 L5915；静态数据，运行时 capability 是 `modes` 还是 `configOptions` 未验证 |
+| kimi | `auto`（静态）；运行时为 `default` | 运行时：mode `yolo`（`modes` 与 `category: "mode"` 选项均包含）；静态数据曾列为 `_permission` 类 `permission_mode=yolo` | **阶段 2 运行验证**：Kimi Code 2.0.2 ACP 服务（`session/new`）返回 `mode` 选项 `default/plan/auto/yolo` 与同名 `modes`，没有 `permission_mode`。静态数据过时；Agenvo 两种形态都识别 |
 | pi、devin、bub、dimcode | 无 | 静态数据中未发现 | 需要运行时 capability 才能判断 |
 
 原生客户端自己的“full access”识别表是 `classifyPermissionModeFace`（L5777）：`agent-full-access`、`danger-full-access`、`bypassPermissions`、`yolo`、`always-approve` 归为 full-access，其余注释为 “Unknown / third-party (not adapted)”。这是 Agenvo 可以对齐的原生依据，也说明这些 id 的含义只对内置 provider 可靠。
@@ -139,6 +139,19 @@ Lody Agent Role（`agent-role list/get`，可覆盖手工配置）是另一条�
 
 本期只处理与放开直接相关的两项：自动批准受策略约束；steer 的原生处置（`disposition`/`recoveryOwned`）如实返回。其余留给事件流设计任务，建议切入点：权限请求与 Session 状态事件、截断事件保留 `turnId`、事件携带 `agentConfigId`、文档订阅与读取分离并可驱逐。
 
+## 阶段 2：`_permission` 类选项的验证与账号依赖
+
+方法：用固定版本的原生运行时直接发起 ACP `initialize` / `session/new`，记录实际 capability 形态。Kimi 使用 `@moonshot-ai/kimi-code@2.0.2` 与指向本地端口的虚拟 provider 配置（`KIMI_CODE_HOME` 下的 `config.toml`），不登录账号；Grok 使用 Lody 随包的 `grok-acp.js` 适配器与 `@xai-official/grok@1.0.40`（Lody 0.104.0 固定的运行时版本）。
+
+| provider | 账号依赖 | 验证结果 | 状态 |
+| --- | --- | --- | --- |
+| Kimi | `session/new` 无账号即可（配置虚拟 provider）；真实对话需要模型端点 | 运行时 capability 为 mode `yolo`，**不是** `_permission` 选项（见上表）。`fullAccessSelection` 优先识别 `permission_mode=yolo`，其次 mode `yolo`，两种形态均有 fixture | capability 形态已运行验证；未经真实对话验收。Lody 实际使用的是其分支构建 `2.0.2-lody.*`，此处用的是同版本公开包 |
+| Grok | **需要**。适配器 `session/new` 返回 `Authentication required`，唯一认证方式是 `grok.com` 登录 | 无法在隔离环境取得运行时 capability。`permission_mode=always-approve` 仍只来自静态数据 | 仅 fixture 级覆盖，未经运行验证；保持调用者显式选择 |
+| DeepSeek Harness | 未检查（需要 `DEEPSEEK_API_KEY` 与 npx 包） | 静态数据 | 仅 fixture 级覆盖 |
+| registry | 各 Agent 不同，多数需要账号 | 未验证 | 不做默认；仅调用者显式选择 |
+
+决定(b)保持不变：Kimi 默认 full access，Grok 不默认。因为 Kimi 的运行时形态与静态数据不同，识别规则不再依赖单一形态，这也说明静态依据对其余 provider 的可靠度有限，文档对它们保持“未经运行验证”的标注。
+
 ## 风险与备选方案
 
 - **继续白名单，逐个加 provider。** 每个 provider 都要改 Agenvo，违背“不维护 Agent 类型白名单”，也覆盖不了 registry 与 custom。不选。
@@ -166,6 +179,12 @@ Lody Agent Role（`agent-role list/get`，可覆盖手工配置）是另一条�
 
 **阶段 3：事件流缺口。** 单独设计，见事件流含义一节。
 
+事件流设计原则（用户已确认）：事件的读者是接收事件的 Agent，不是人类操作员，也不是只转发的 webhook 消费者。判断标准是接收 Agent 能否仅凭事件本身理解发生了什么并决定下一步，即事件携带足够的身份和原生证据（“拿到即可理解并行动”）。
+
+这是[事件设计](events.zh-CN.md)中 Herdr/Codex 的 `runtime.changed` 已确立的跨 Connector 标准：保留原生类型和原生数据，不压平为成功/失败分类；携带原生身份（device/instance/service/thread 与后端 generation）；事件只是唤醒和证据，消费者再读取当前状态与输出，自行判断完成或下一步输入，Agenvo 不预先证明业务成功。
+
+阶段 3 的目标是让 Lody 事件达到同一标准，并以“接收 Agent 能否不靠猜测理解并行动”评估。当前被截断的事件只有 sessionId，没有 turnId、agentConfigId，也没有权限或状态类事件，证据链断裂，接收 Agent 不知道发生了什么、该读什么。设计须保留原生语义，不发明统一的业务结果分类。
+
 ## 决定与实现
 
 已决定：非 full-access 配置使用原生缺省并保持权限请求显式；full-access 默认扩展到 Kimi，不扩展到 Grok（Grok 经 `configOptionValues` 显式选择）；阶段 1 纳入 DeepSeek。
@@ -180,7 +199,7 @@ Lody Agent Role（`agent-role list/get`，可覆盖手工配置）是另一条�
 
 测试：`tests/lody-agents.test.ts`（协议 fixture：各 provider 的默认与显式选择、校验拒绝、自动批准边界、steer 重新排队）与 `tests/system/lody-agents.test.ts`（固定 `lody@0.104.0` 守护进程 + `tests/support/acp-agent.mjs`，无账号）。真实 DeepSeek、Kimi、Grok 运行时没有在隔离环境中执行；它们的识别依据是随包静态 capability 数据，属于未经运行验收的部分。
 
-推迟到后续阶段：Grok/Kimi 真实运行时 capability 形态验证；registry 配置的真实运行验证；阶段 3 的事件流缺口（本期未改动事件结构）。
+推迟到后续阶段：Grok 运行时 capability 验证（需要 grok.com 账号）、DeepSeek 运行时验证；registry 配置的真实运行验证；阶段 3 的事件流缺口（本期未改动事件结构）。
 
 ## 当初的待决定
 

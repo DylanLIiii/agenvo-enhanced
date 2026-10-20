@@ -59,7 +59,7 @@ return await call(target, "lody.sessions.create", {
 
 `lody.sessions.send` 接受 `sessionId`、`text`，以及可选的 `modelId`、`modeId` 和 `configOptionValues`。`lody.catalog` 列出的任何 Agent 配置都可使用，包括 builtin、registry 和 custom ACP Agent。Agenvo 在写入前，按 Lody 为该配置发布的 capability（`modes`、`models`、`configOptions`）校验这些选择，因为原生守护进程不会校验用户轮次的选择，而是原样转给 Agent。若 Lody 尚未探测该配置（创建后到 Agent 首次运行前的数秒内），带选择的输入会以 `unsupported_capability` 拒绝；请省略选择或稍后重试。
 
-未传 `modeId` 或 `configOptionValues` 时，声明了对应设置的 builtin Codex（`agent-full-access`）、Claude（`bypassPermissions`）、DeepSeek Harness（`danger-full-access`）和 Kimi（`permission_mode` 为 `yolo`）配置以 full access 运行，普通执行权限自动批准。其他配置（包括 Grok、registry 和 custom Agent）使用原生默认设置，权限请求保持为显式交互。要让 Grok 无人值守运行，传入 `configOptionValues: { "permission_mode": "always-approve" }`；这类显式选择同样会关闭自动批准。忙时输入由 Lody 派发，Agenvo 不增加队列，也不自动重发输入。
+未传 `modeId` 或 `configOptionValues` 时，声明了对应设置的 builtin Codex（`agent-full-access`）、Claude（`bypassPermissions`）、DeepSeek Harness（`danger-full-access`）和 Kimi（mode `yolo`，或 `permission_mode` 选项 `yolo`）配置以 full access 运行，普通执行权限自动批准。其他配置（包括 Grok、registry 和 custom Agent）使用原生默认设置，权限请求保持为显式交互。Kimi 的 capability 形态已在无账号的 Kimi Code 运行时核对；DeepSeek、Grok 和 registry 配置依据随包静态数据识别，未经运行验证（Grok 需要 grok.com 登录）。要让 Grok 无人值守运行，传入 `configOptionValues: { "permission_mode": "always-approve" }`；这类显式选择同样会关闭自动批准。忙时输入由 Lody 派发，Agenvo 不增加队列，也不自动重发输入。
 
 `cloud_input_synced` 表示历史和派发标记已到达云端，不代表机器已经开始执行或任务成功。写入后超时返回 `unknown`，原生身份保留在 `error.native` 中；重新输入前应检查 Session。`local_input_received` 表示 daemon 返回的版本向量已覆盖写入，不承诺磁盘持久化、云端上传或执行完成。Connector 在内存保留协议副本，重启后从连接的服务重建；未确认写入没有 Connector 侧的恢复保证。
 

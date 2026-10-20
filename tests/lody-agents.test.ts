@@ -30,8 +30,22 @@ const agents = {
       ],
     },
   },
+  // Shape recorded from the Kimi Code 2.0.2 ACP server with a fixture provider
+  // (no account): `yolo` is an ordinary mode, also published as a `mode` option.
   kimi: {
     cliType: "builtin",
+    capability: {
+      modes: ["default", "plan", "auto", "yolo"].map((id) => ({ id })),
+      configOptions: [
+        select("model", "model", ["fixture"]),
+        select("mode", "mode", ["default", "plan", "auto", "yolo"]),
+      ],
+    },
+  },
+  // Static bundle data lists Kimi's permission as a `_permission` option.
+  kimiOption: {
+    cliType: "builtin",
+    agentType: "kimi",
     capability: {
       modes: [],
       configOptions: [
@@ -114,7 +128,8 @@ test(
     const expected: Record<string, any> = {
       claude: { modeId: "bypassPermissions" },
       deepseek: { modeId: "danger-full-access" },
-      kimi: { configOptionValues: { permission_mode: "yolo" } },
+      kimi: { modeId: "yolo" },
+      kimiOption: { configOptionValues: { permission_mode: "yolo" } },
       // Grok is deliberately caller-explicit; custom agents are never guessed.
       grok: {},
       mystery: {},
@@ -209,7 +224,7 @@ test(
     // The same Session moves to an explicit policy: permissions are no longer
     // answered for it, and a native-default agent is never approved.
     for (const [agent, params] of [
-      ["kimi", { configOptionValues: { permission_mode: "auto" } }],
+      ["kimi", { modeId: "auto" }],
       ["mystery", {}],
     ] as const) {
       const id = await start(agent);
