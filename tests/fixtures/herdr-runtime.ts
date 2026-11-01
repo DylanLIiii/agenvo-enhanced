@@ -1,162 +1,48 @@
-import { isolatedEnvironment, until } from "../support/environment.js";
-import { stopProcess } from "../support/process.js";
-// Test-owned native service. Runtime provisioning deliberately bypasses Agenvo.
-import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { execFile } from "node:child_process";
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import { promisify } from "node:util";
-import { fileURLToPath } from "node:url";
-import { type HerdrConfig } from "../support/config.js";
-const exec = promisify(execFile);
-export function herdrFixture(
-  config: Pick<HerdrConfig, "binary" | "configRoot" | "cwd">,
-  session: string,
-) {
-  const socket = join(config.configRoot, "sessions", session, "herdr.sock");
+import { binary } from "@agenvo/connector/cli/binary";
+import { isolatedEnvironment } from "../support/environment.js";
+
+// Test-owned core: a private session, state and endpoint; never the user's core.
+export async function herdrFixture(root: string) {
+  const executable = await binary("hc", {});
+  const session = `test${process.pid}${Math.random().toString(36).slice(2, 8)}`;
+  const endpoint =
+    process.platform === "win32"
+      ? `\\\\.\\pipe\\agenvo-${session}`
+      : join(root, "core.sock");
   const env = {
-    ...isolatedEnvironment(config.cwd),
-    CODEX_HOME: join(config.cwd, "codex-test-home"),
-    XDG_CONFIG_HOME: dirname(config.configRoot),
-    HERDR_SOCKET_PATH: socket,
-    HERDR_CONFIG_PATH: join(config.configRoot, "config.toml"),
-    HERDR_SESSION: session,
+    ...isolatedEnvironment(root),
+    HC_SESSION: session,
+    HC_SOCKET: endpoint,
+    XDG_STATE_HOME: join(root, "state"),
+    XDG_CONFIG_HOME: join(root, "config"),
+    XDG_RUNTIME_DIR: join(root, "run"),
+    HC_SETTLE_MS: "0",
   };
-  const exists = () =>
-    stat(socket).then(
-      () => true,
-      (error) => {
-        if (error.code === "ENOENT") return false;
-        throw error;
-      },
-    );
-  let owned = false;
-  let server: ChildProcess | undefined;
+  const exec = promisify(execFile);
+  const command = (args: string[]) =>
+    exec(executable, args, {
+      env,
+      cwd: root,
+      timeout: 15000,
+      maxBuffer: 1024 * 1024,
+    });
+  let started = false;
   return {
-    async diagnostics(paneId?: string) {
-      const command = async (args: string[]) =>
-        exec(config.binary, args, {
-          env,
-          cwd: config.cwd,
-          timeout: 2000,
-          maxBuffer: 256 * 1024,
-        });
-      const sources: Record<string, Promise<unknown>> = {
-        agents: command(["agent", "list"]),
-        herdrLog: readFile(join(dirname(socket), "herdr-server.log"), "utf8"),
-      };
-      if (paneId) {
-        sources.processes = command(["pane", "process-info", "--pane", paneId]);
-        sources.detection = command(["agent", "explain", paneId, "--json"]);
-        sources.terminal = command([
-          "pane",
-          "read",
-          paneId,
-          "--source",
-          "visible",
-          "--lines",
-          "100",
-        ]);
-      }
-      // Capture before stopping the service. A missing log or failed probe must
-      // not hide the original failure or prevent the remaining diagnostics.
-      return Object.fromEntries(
-        await Promise.all(
-          Object.entries(sources).map(async ([name, source]) => {
-            try {
-              const value = await source;
-              return [
-                name,
-                typeof value === "string" ? value.slice(-65536) : value,
-              ];
-            } catch (error) {
-              return [name, { error: String(error) }];
-            }
-          }),
-        ),
-      );
-    },
+    endpoint,
+    command,
     async start() {
-      if (await exists()) throw new Error("Test endpoint already exists");
-      await mkdir(dirname(socket), { recursive: true });
-      await mkdir(env.CODEX_HOME!, { recursive: true });
-      if (process.platform === "win32")
-        await writeFile(
-          env.HERDR_CONFIG_PATH,
-          '[terminal]\ndefault_shell = "pwsh.exe"\n',
-        );
-      const child = spawn(config.binary, ["server"], {
-        cwd: config.cwd,
-        env,
-        stdio: "ignore",
-        detached: true,
-      });
-      server = child;
-      owned = true;
-      let error: Error | undefined;
-      child.on("error", (e) => {
-        error = e;
-      });
-      child.unref();
-      for (let i = 0; i < 80; i++) {
-        if (error) throw error;
-        if (await exists()) return;
-        await new Promise((r) => setTimeout(r, 100));
-      }
-      throw new Error("Test Herdr did not start");
+      await mkdir(root, { recursive: true });
+      await command(["server", "start"]);
+      started = true;
     },
     async stop() {
-      if (!owned) return;
-      if (process.platform === "win32") {
-        // Herdr 0.9.3 may leave descendants alive, but force-killing the server
-        // skips session persistence. Hold child handles before graceful shutdown
-        // so survivors remain identifiable even after their parent has exited.
-        try {
-          await exec(
-            "pwsh.exe",
-            [
-              "-NoProfile",
-              "-NonInteractive",
-              "-File",
-              fileURLToPath(new URL("./stop-herdr.ps1", import.meta.url)),
-              "-ServerPid",
-              String(server!.pid),
-              "-HerdrBinary",
-              config.binary,
-            ],
-            { env, cwd: config.cwd, timeout: 20000 },
-          );
-          await until(
-            () => server!.exitCode !== null || server!.signalCode !== null,
-            (exited) => exited,
-            8000,
-          );
-        } finally {
-          await stopProcess(server!);
-          await rm(socket, { force: true });
-          owned = false;
-        }
-        return;
-      }
-      if (!(await exists())) return;
-      await exec(config.binary, ["server", "stop"], {
-        env,
-        cwd: config.cwd,
-        timeout: 8000,
-      });
-      for (let i = 0; i < 80; i++) {
-        if (!(await exists())) {
-          // The endpoint disappears before Herdr finishes closing its panes.
-          await until(
-            () => server!.exitCode !== null || server!.signalCode !== null,
-            (exited) => exited,
-            8000,
-          );
-          owned = false;
-          return;
-        }
-        await new Promise((r) => setTimeout(r, 100));
-      }
-      throw new Error("Test Herdr did not stop");
+      if (!started) return;
+      await command(["server", "stop"]);
+      started = false;
     },
   };
 }

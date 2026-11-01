@@ -18,7 +18,7 @@ Experimental [Amp support](docs/amp.md) connects native Amp hosts through a loca
 
 - **Leave your desk, keep the work going.** Your assistant sees the agents already running in Herdr without restarting them, and can resume Codex threads later. Check progress or reply from your phone.
 - **Follow up when something changes.** Ask a [ChatGPT dot](https://learn.chatgpt.com/docs/dots) to watch a computer's agents and tell it how to respond. When an agent finishes a turn, waits for input or exits, the dot receives an event, reads the output and takes the next step.
-- **One assistant across your computers.** Herdr on your laptop and Codex on your server appear in one list. Your assistant can start new work where it fits: a Codex thread on the server, or Codex, Claude or Devin in a Herdr pane.
+- **One assistant across your computers.** Herdr on your laptop and Codex on your server appear in one list. Your assistant can start new work where it fits: a Codex thread on the server, or Codex, Claude or Devin in a Herdr Core terminal.
 - **Agents keep going through a connection loss.** Closing the chat or losing the network does not stop them. Connectors reconnect on their own, and your assistant picks up from each agent's current state.
 
 ## Set up

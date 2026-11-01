@@ -64,20 +64,12 @@ if (!process.env.AGENVO_E2E_DIR) {
 } else {
   const dir = process.env.AGENVO_E2E_DIR;
   const cfg = join(dir, "config");
-  await mkdir(join(dir, "herdr"));
-  const nativeServer = herdrFixture(
-    {
-      binary: (await exec("sh", ["-c", "command -v herdr"])).stdout.trim(),
-      configRoot: await realpath(join(dir, "herdr")),
-      cwd: await realpath(dir),
-    },
-    "e2e",
-  );
+  const nativeServer = await herdrFixture(join(dir, "herdr"));
+  await nativeServer.start();
   const children: ChildProcess[] = [];
   let proxy: net.Server | undefined;
   const tunnels = new Set<{ down: net.Socket; up: net.Socket }>();
   let client: Client | undefined;
-  let ref: any;
   let target: any;
   const child = spawn(
     process.execPath,
@@ -163,10 +155,8 @@ if (!process.env.AGENVO_E2E_DIR) {
       "add",
       "--id",
       "work",
-      "--config-root",
-      await realpath(join(dir, "herdr")),
-      "--cwd",
-      await realpath(dir),
+      "--endpoint",
+      nativeServer.endpoint,
     );
     const connecting = cli(
       "connect",
@@ -296,9 +286,9 @@ if (!process.env.AGENVO_E2E_DIR) {
       body: new URLSearchParams({
         grant_type: "authorization_code",
         client_id: registration.client_id,
-        code: new URL(approval.headers.get("location")!).searchParams.get(
-          "code",
-        )!,
+        code: new URL(
+          approval.headers.get("refresh")!.replace(/^0;url=/, ""),
+        ).searchParams.get("code")!,
         code_verifier: verifier,
         redirect_uri: "http://127.0.0.1:8899/callback",
         resource: "https://agenvo.test/mcp",
@@ -346,51 +336,46 @@ if (!process.env.AGENVO_E2E_DIR) {
       assert.equal(result.execution, "accepted", JSON.stringify(result));
       return result.result;
     };
-    await nativeServer.start();
-    const discovered = await native("session.list");
-    const existing = discovered.items.find(
-      (item: any) => item.session === "e2e",
-    );
-    assert.ok(existing?.endpointPresent);
-    ref = { session: "e2e" };
-    for (const method of ["session.start", "session.stop"]) {
+    const discovered = await native("terminal.list");
+    assert.ok(Array.isArray(discovered.terminals));
+    for (const method of ["server.start", "server.stop"]) {
       const removed = await invoke({
         deviceId: target.deviceId,
         instanceId: "work",
         method,
-        params: ref,
+        params: {},
       });
       assert.equal(removed.error.code, "unsupported_method");
-      const description = await describeMethod(method);
-      assert.equal(description.length, 0);
+      assert.equal((await describeMethod(method)).length, 0);
     }
     evidence.nativeLifecycleNotExposed = true;
-    await native("workspace.create", ref);
-    const panes = await native("pane.list", ref);
-    const paneId = panes.result.panes[0].pane_id;
-    await native("pane.run", {
-      ...ref,
-      paneId,
-      command: "printf 'AGENVO_E2E_OK\\n'",
+    const created = await native("terminal.run", {
+      argv: ["/bin/sh"],
+      cwd: dir,
     });
-    const read = await native("pane.read", { ...ref, paneId });
-    assert.match(JSON.stringify(read), /AGENVO_E2E_OK/);
+    const paneId = created.address;
+    await native("terminal.send", {
+      terminal: paneId,
+      text: "printf 'AGENVO_E2E_OK\\n'",
+    });
+    let read: any;
+    for (let i = 0; i < 30; i++) {
+      read = await native("terminal.read", { terminal: paneId });
+      if (read.text.includes("AGENVO_E2E_OK")) break;
+      await sleep();
+    }
+    assert.match(read.text, /AGENVO_E2E_OK/);
     evidence.nativeRoundTrip = true;
-    const method = await describeMethod("pane.send-keys");
-    assert.equal(method[0].readOnly, false);
-    await native("agent.list", ref);
-    await native("pane.get", { ...ref, paneId });
-    await native("pane.process-info", { ...ref, paneId });
-    await native("pane.send-text", {
-      ...ref,
-      paneId,
+    assert.equal((await describeMethod("terminal.keys"))[0].readOnly, false);
+    await native("terminal.get", { terminal: paneId });
+    await native("terminal.send", {
+      terminal: paneId,
       text: "printf 'AGENVO_MCP_%s\\n' 'INPUT_OK'",
     });
-    await native("pane.send-keys", { ...ref, paneId, keys: ["enter"] });
     let inputObserved = false;
     for (let i = 0; i < 30; i++) {
       if (
-        JSON.stringify(await native("pane.read", { ...ref, paneId })).includes(
+        (await native("terminal.read", { terminal: paneId })).text.includes(
           "AGENVO_MCP_INPUT_OK",
         )
       ) {
@@ -404,10 +389,9 @@ if (!process.env.AGENVO_E2E_DIR) {
 
     if (process.env.AGENVO_E2E_BLACKHOLE) {
       const counter = join(await realpath(dir), "counter.txt");
-      await native("pane.run", {
-        ...ref,
-        paneId,
-        command: "printf A >> " + counter,
+      await native("terminal.send", {
+        terminal: paneId,
+        text: "printf A >> " + counter,
       });
       for (let i = 0; i < 30; i++) {
         try {
@@ -429,8 +413,8 @@ if (!process.env.AGENVO_E2E_DIR) {
       const lost = await invoke({
         deviceId: target.deviceId,
         instanceId: "work",
-        method: "pane.run",
-        params: { ...ref, paneId, command: "printf B >> " + counter },
+        method: "terminal.send",
+        params: { terminal: paneId, text: "printf B >> " + counter },
       });
       assert.equal(lost.execution, "unknown");
       let restored = false;
@@ -469,12 +453,11 @@ if (!process.env.AGENVO_E2E_DIR) {
       await sleep();
     }
     assert.match(
-      JSON.stringify(await native("pane.read", { ...ref, paneId })),
+      JSON.stringify(await native("terminal.read", { terminal: paneId })),
       /AGENVO_E2E_OK/,
     );
     evidence.nativeReferenceAfterRestart = true;
     await nativeServer.stop();
-    ref = undefined;
     await cli("disconnect");
     const exit = Promise.race([once(replacement, "exit"), sleep(5000)]);
     await exit;
@@ -483,7 +466,7 @@ if (!process.env.AGENVO_E2E_DIR) {
     const denied = await invoke({
       deviceId: target.deviceId,
       instanceId: "work",
-      method: "session.list",
+      method: "terminal.list",
       params: {},
     });
     assert.equal(denied.error.code, "permission_denied");

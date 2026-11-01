@@ -53,6 +53,6 @@ Keep the previous deployment identifier or artifact. Restore it only when it rem
 
 ## Verify and report
 
-Read the actual process or platform deployment version, confirm Connector reconnection, then use the existing authorized MCP client to call `search` and a read-only native operation such as Herdr `session.list` or Codex `thread/list`. Verify that existing instances and work remain accessible without unnecessary re-pairing. This is the completion check; `/health` or installation success alone is insufficient.
+Read the actual process or platform deployment version, confirm Connector reconnection, then use the existing authorized MCP client to call `search` and a read-only native operation such as Herdr `terminal.list` or Codex `thread/list`. Verify that existing instances and work remain accessible without unnecessary re-pairing. This is the completion check; `/health` or installation success alone is insufficient.
 
 If the new process is healthy but a device or native service is offline, report the completed update and the unresolved connection separately. A network failure alone does not establish a bad release. Preserve native errors and task/platform output so the next action follows the evidence, and never replay a possibly completed business write to test connectivity.

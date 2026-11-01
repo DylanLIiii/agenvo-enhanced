@@ -53,6 +53,6 @@ macOS/Linux 的 Connector `service install` 定义包含 Node 和 CLI 的绝对�
 
 ## 验证并报告
 
-读取实际进程或平台部署的版本，确认 Connector 重连，再通过原有获准 MCP 客户端执行 search 和只读原生操作，例如 Herdr `session.list` 或 Codex `thread/list`。确认已有实例和工作仍可访问，无需不必要的重新配对。这是完成条件，不能只凭 /health 或安装成功验收。
+读取实际进程或平台部署的版本，确认 Connector 重连，再通过原有获准 MCP 客户端执行 search 和只读原生操作，例如 Herdr `terminal.list` 或 Codex `thread/list`。确认已有实例和工作仍可访问，无需不必要的重新配对。这是完成条件，不能只凭 /health 或安装成功验收。
 
 新进程正常但设备或原生服务离线时，分别报告已完成的更新和未解决的连接问题。网络故障本身不能证明发行版本有缺陷。保留原始错误、任务或平台输出，根据证据决定下一步，不要通过重放可能已完成的业务写操作测试连接。

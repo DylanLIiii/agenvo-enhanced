@@ -28,7 +28,7 @@ Queries are case-insensitive whitespace-separated keywords; all words must occur
 
 A deviceId identifies a Connector, not a physical machine. Offline or unavailable instances retain their status or error; a failed method lookup may leave partial results. Online instances without matching methods are omitted from nonempty searches. Names are unique within an instance; no Agenvo namespace is required.
 
-Both Connectors use common operation terms: list, create, read, submit input, interrupt and respond. A work context is a conversation thread in Codex and an agent running in a terminal pane in Herdr. A Herdr session is a native service process; a workspace is a terminal container. Native method and field names remain unchanged, preserving these differences.
+Both Connectors use common operation terms: list, create, read, submit input, interrupt and respond. A work context is a conversation thread in Codex and a terminal running an agent in Herdr Core. A Herdr Core session is an independently running service. Native method and field names remain unchanged, preserving these differences.
 
 Discovery results also carry the optional owner-supplied `context` text unchanged. Read it when choosing and using an instance. Empty queries, matching method queries, and offline instances can all include the last announcement. Context does not participate in method keyword matching, guarantee live capabilities or permissions, or automatically enter native calls. See [instance context configuration](usage.md#add-instance-context).
 
@@ -95,18 +95,16 @@ Each native call uses the existing access authorization. If a later call is deni
 
 `execute` does not provide timers such as `setTimeout` or `sleep`, or blocking waits for task completion or future output. Return after submitting input. The calling Agent decides when to read again and waits outside `execute`, using its own waiting mechanism or the [events protocol](events.md). Do not busy-wait or poll for completion inside a script. The 30-second deadline protects script execution; it is not a task-waiting budget.
 
-For example, submit a Herdr command in one `execute`, using the discovered target, session and paneId:
+For example, submit a Herdr command in one `execute`, using the discovered target and terminal address:
 
 ```js
-return await call(target, "pane.run", {...base, command: "echo hi"});
+return await call(target, "terminal.send", {terminal, text: "echo hi"});
 ```
 
-After checking the receipt and waiting on the Agent side, read output in a separate `execute`. Define `target` and `base` again because script variables do not persist between executions:
+After checking the receipt and waiting on the Agent side, read output in a separate `execute`. Define `target` and `terminal` again because script variables do not persist between executions:
 
 ```js
-return await call(target, "pane.read", {
-  ...base, lines: 20, source: "recent-unwrapped"
-});
+return await call(target, "terminal.read", {terminal, lines: 20});
 ```
 
 Inspect the output to decide whether the command has finished. If output is not ready, wait outside `execute` before reading again. If a script fails after submitting input, inspect the confirmations attached to the error diagnostics and the native state before repeating the submission.
@@ -119,41 +117,18 @@ Use `thread/list`, `thread/start`, `thread/read`, `thread/resume`, `thread/archi
 
 `requests.list({threadId?, cursor?})` returns pending user questions and tool calls, including their parameters and responseSchema. Select the desired entry inside execute, then answer with `requests.respond({interactionId, result})`. IDs are connection-scoped; expired or duplicate responses fail. Submission does not prove your answer won a race with another client. Permission approvals are automatic and do not enter this pending list.
 
-## Herdr
+## Herdr Core
 
-Call native workspace, pane and agent methods directly when the session is known; use `session.list` to discover services when needed. Calls address the session's current native targets, whose names and IDs may be reused after a service restart; query native state again when target identity matters. The service runs independently; Agenvo does not start or stop it. `agent.list` includes externally launched Agents. Native idle, done or unknown state does not prove business success or prevent the caller from inspecting the terminal.
+Each instance connects to one independently running Core session. `terminal.list` includes existing terminals from other clients and machines connected to that Core; addresses such as `box/t7` remain native. `terminal.run` starts a program or template in a new terminal; pass `argv`, `cwd`, `on`, and execution settings as appropriate. Templates may send an initial message: inspect `first_message`. After an unknown result inspect the terminal list before retrying.
 
-Create a terminal container with `workspace.create`, or add a shell pane beside existing panes with `tab.create`. `tab.close` closes that tab and its terminals. These resources do not start an agent. Use `worktree.list`, `worktree.create`, `worktree.open` and `worktree.remove` to manage Git worktree workspaces, including worktrees created outside Herdr. Removal keeps the branch; `force: true` discards uncommitted changes. Worktree methods accept `trustRepository` (default `false`) to trust the selected repository for that Git command without changing Git configuration. Creation and opening preserve user focus.
+`terminal.send` pastes text and presses Enter; it refuses a blocked program unless `force` is set. Inspect the question before using `force` to answer. `terminal.keys` sends native keys and `terminal.interrupt` reports the effect of a stop key. `terminal.kill` stops a program; `terminal.rm` removes a finished record. Connector shutdown does not stop Core or its terminals.
 
-`agent.start` requires an existing pane and returns starting with native query keys. Poll `agent.get`. A startup timeout does not stop the child; rediscover by pane ID before considering another launch. Herdr validates `kind`; Agenvo forwards `args` unchanged without injecting or rejecting execution permission settings. Owners can declare launch conventions in instance `context`, and callers choose the corresponding native arguments.
-
-`agent.prompt` and `agent.send-keys` address the native `name`; pane input addresses `paneId`. Callers can inspect the current agent or terminal when deciding what input to send.
-
-Read `agent.read` or `pane.read`; `lines` defaults to `80` and `source` to `recent-unwrapped`. If history is unavailable while the Agent is busy, select source `visible` explicitly. Output is a bounded terminal snapshot. Questions can be answered with native text and keys after inspecting the current UI. Do not infer structured request IDs or durable history from terminal output.
-
-### Filter terminal output
-
-Snapshots may include earlier output, blank lines and TUI decoration. Filter or select text inside `execute` so only the result you need enters your context. For example, using the discovered `target` and `base` containing `session` and `paneId`, remove blank lines and lines made entirely of box-drawing characters:
+`terminal.read` returns `text`, `complete`, `how` and `why`; `lines` selects history above the screen. Full-screen applications may only expose their screen while working, and a snapshot is not a durable transcript. `terminal.get` reports only status supplied by the program via OSC 7501; programs without reports have no status. Neither idle nor done proves task success. Use [events](events.md) to decide when to read, and re-read after a resync.
 
 ```js
-const read = await call(target, "pane.read", {
-  ...base, lines: 80, source: "recent-unwrapped"
-});
+const read = await call(target, "terminal.read", {terminal, lines: 80});
 if (read.error) return read;
-return read.result.output
-  .split("\n")
-  .filter(line => line.trim() && !/^[\s\u2500-\u257f]+$/.test(line))
-  .join("\n");
+return read.result.text;
 ```
-
-For `agent.read`, use `name` instead of `paneId` in `base`. This example is lossy: it removes blank lines and table borders, but preserves indentation, repeated text and lines containing text. Use `return read.result.output` when formatting matters or to inspect the original snapshot; filtering changes only this script's return value. It does not free space in the native `lines` window or recover text outside that window.
-
-Optionally select a window using a distinctive fragment of your own input. Treat this as a heuristic: repeated or quoted input can be ambiguous, and folded, wrapped or scrolled-out input may not match. Report ambiguity or a fallback to the last few lines explicitly; a match proves neither a complete reply nor incremental output.
-
-When only completion or a request for input matters, native state or events can guide when to read. To observe progress, read the current output even if state has not changed: `state_change_seq` tracks state transitions, not every output change. Choose `lines` and `source` for the required context, and wait outside `execute` between reads. Neither strategy guarantees all output produced between snapshots.
-
-Herdr parameter validation failures return `invalid_params` with field paths and reasons in `error.message`. Paths are JSON arrays such as `["lines"]`; `[]` identifies an error on the whole parameter object, such as an unrecognized key.
-
-For change-triggered observation, use the existing [events protocol](events.md), then read current state and output through execute.
 
 Lody exposes native Sessions, history, exact-turn cancellation and interactions through `lody.*` methods. See the [Lody guide](lody.md) for cloud and local connection boundaries.

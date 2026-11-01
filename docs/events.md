@@ -12,13 +12,13 @@ In ChatGPT, rescan the Agenvo plugin after upgrading. Confirm that `runtime.chan
 
 | Argument | Meaning |
 | --- | --- |
-| `serviceId` | Native Herdr session name, or `default` for Codex |
-| `threadId` | Native Herdr pane ID or Codex thread ID |
-| `nativeTypes` | Exact native event names, such as `pane.agent_status_changed` or `turn/completed` |
+| `serviceId` | `default` for Herdr Core and Codex |
+| `threadId` | Herdr Core terminal address or Codex thread ID |
+| `nativeTypes` | Exact native event names, such as `status` or `turn/completed` |
 
-Use the native session and pane/thread IDs as serviceId and threadId. Subscribe to the whole instance by omitting optional filters; newly discovered services and loaded threads are included. Codex subscriptions resume **loaded** threads with Agenvo's full-access settings; archived or unloaded history is not automatically loaded. Native observation is bounded to 128 Codex threads and 512 panes per Herdr service.
+Use `default` as serviceId for Herdr Core and the native terminal address as threadId. Subscribe to the whole instance by omitting optional filters; newly discovered services and loaded threads are included. Codex subscriptions resume **loaded** threads with Agenvo's full-access settings; archived or unloaded history is not automatically loaded. Codex observation is bounded to 128 threads.
 
-Events contain the device, instance, service, optional thread, backend generation, native type and native data. Native turn completion may mean completed, failed or interrupted. Herdr `idle`/`done` is useful evidence that the Agent can accept input. Token deltas are not pushed; read output through native read methods or `notifications.list`.
+Events contain the device, instance, service, optional thread, backend generation, native type and native data. Native turn completion may mean completed, failed or interrupted. Herdr Core reports only status supplied by the program; absent status is unknown and `idle`/`done` do not prove success. Token deltas are not pushed; read output through native read methods or `notifications.list`.
 
 ## Recovery and delivery
 

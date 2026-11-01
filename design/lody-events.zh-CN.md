@@ -32,7 +32,7 @@
 - **协议**：[`packages/protocol/src/events.ts`](../packages/protocol/src/events.ts) 定义唯一事件 `runtime.changed`。过滤条件只有 `deviceId`、`instanceId`、`serviceId`、`threadId`、`nativeTypes`；事件体是严格对象 `{eventId, timestamp, serviceId, threadId?, generation?, nativeType, native}`，不接受额外顶层字段，所以任何新增信息只能进入 `native`。
 - **Connector 侧**：[`connection.ts`](../packages/connector/src/connection.ts) 对每个 Adapter 调用可选的 `watchEvents(emit)`，把事件包成 `runtime_event` 发给 Relay。Connector 不知道谁订阅了什么，也不做过滤；非 `online` 状态下事件直接丢弃。重新连接 Relay 时对每个实例发一次 `agenvo.resync_required`（`connector_connected`）。
 - **Relay 侧**：[`core.ts`](../packages/relay/src/core.ts#L361) 丢弃帧超过 64KB、指纹未批准或不符合 schema 的事件；[`events.ts`](../packages/relay/src/events.ts) 的 `receive` 按 `deviceId/instanceId/serviceId/threadId/nativeTypes` 匹配订阅，**`agenvo.resync_required` 绕过 `threadId` 与 `nativeTypes` 过滤**；每个订阅积压上限 64 条，超出则清空并改投一条 `delivery_capacity` 重同步；全局 256 条；投递最多 5 次，指数退避，同一 `eventId` 重试；订阅 TTL 默认一天、最长七天。无历史重放，`cursor` 恒为 null。
-- **Connector 要发布事件需要做的事**：实现 `Adapter.watchEvents`，构造符合 `runtimeEvent` 的事件，原生数据控制在帧限制内，并在观察中断时发 `agenvo.resync_required`。Herdr（[`herdr-events.ts`](../apps/herdr/src/herdr-events.ts)）转发 `pane.*` 原生事件并按 24KB 截断；Codex（[`codex.ts`](../apps/codex-app-server/src/codex.ts#L224)）只转发白名单内的原生通知，如 `item/tool/requestUserInput`、`serverRequest/resolved`、`turn/completed`，断线时发重同步。
+- **Connector 要发布事件需要做的事**：实现 `Adapter.watchEvents`，构造符合 `runtimeEvent` 的事件，原生数据控制在帧限制内，并在观察中断时发 `agenvo.resync_required`。Herdr（[`herdr.ts`](../apps/herdr/src/herdr.ts)）转发 Core 原生 原生事件并按 24KB 截断；Codex（[`codex.ts`](../apps/codex-app-server/src/codex.ts#L224)）只转发白名单内的原生通知，如 `item/tool/requestUserInput`、`serverRequest/resolved`、`turn/completed`，断线时发重同步。
 
 ### Lody 当前路径
 

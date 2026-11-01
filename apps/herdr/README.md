@@ -2,7 +2,7 @@
 
 [简体中文](README.zh-CN.md)
 
-Connect independently running Herdr services.
+Connect independently running Herdr Core sessions.
 
 <!-- x-release-please-start-version -->
 

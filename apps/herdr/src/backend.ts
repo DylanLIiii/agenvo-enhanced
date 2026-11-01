@@ -1,65 +1,67 @@
-import { realpath } from "node:fs/promises";
-import { resolve, basename } from "node:path";
-import { execa as exec } from "execa";
+import { join, resolve } from "node:path";
+import { homedir } from "node:os";
+import { existsSync } from "node:fs";
 import { Fault } from "@agenvo/protocol";
-import { validatePaths } from "@agenvo/connector/config";
-import { binary } from "@agenvo/connector/cli/binary";
 import type { Backend } from "@agenvo/connector/backend";
 import { instanceConfigSchema, type HerdrConfig } from "./config.js";
 import { HerdrAdapter } from "./herdr.js";
+
 export const backend: Backend<HerdrConfig> = {
   name: "herdr",
   command: "agenvo-herdr",
   schema: instanceConfigSchema,
-  options: ["config-root"],
-  help: "--config-root PATH [--binary PATH] [--cwd PATH]",
-  revision: () => "herdr-0.9.3-native-v1",
+  options: ["endpoint"],
+  help: "[--endpoint PATH] (connects to an independently running Herdr Core socket or Windows named pipe)",
+  revision: () => "herdr-core-0.1.15-native-v2",
   async configure(options) {
-    if (!options["config-root"])
+    if (options.binary || options.cwd)
       throw new Fault(
-        "config_root_required",
-        "Choose the whole Herdr environment with --config-root",
+        "invalid_arguments",
+        "Herdr Core runs independently; configure --endpoint.",
       );
-    const configRoot = await realpath(resolve(String(options["config-root"])));
-    if (basename(configRoot) !== "herdr")
-      throw new Fault(
-        "invalid_config_root",
-        "Use the native directory named herdr; its parent is XDG_CONFIG_HOME.",
-      );
+    const runtime = `/run/user/${process.getuid?.()}`;
+    const endpoint =
+      options.endpoint ??
+      (process.platform === "win32"
+        ? `\\\\.\\pipe\\herdr-core-${(process.env.USERNAME ?? "").replace(/[^a-zA-Z0-9]/g, "")}-default.sock`
+        : process.env.XDG_RUNTIME_DIR
+          ? resolve(process.env.XDG_RUNTIME_DIR, "herdr-core/default.sock")
+          : existsSync(runtime)
+            ? join(runtime, "herdr-core/default.sock")
+            : resolve(
+                process.env.XDG_STATE_HOME ?? join(homedir(), ".local/state"),
+                "herdr-core/default/default.sock",
+              ));
     return instanceConfigSchema.parse({
       id: options.id,
       label: options.label ?? options.id,
       kind: "herdr",
-      binary: await binary("herdr", options),
-      cwd: await realpath(resolve(String(options.cwd ?? process.cwd()))),
-      configRoot,
+      endpoint,
     });
   },
   async create(config) {
     const adapter = new HerdrAdapter(config);
-    try {
-      await validatePaths([config.binary, config.cwd, config.configRoot]);
-      await adapter.init();
-    } catch {
-      adapter.available = false;
-      await adapter.close();
-    }
+    await adapter.init().catch(() => {});
     return adapter;
   },
   async doctor(config) {
+    const adapter = new HerdrAdapter(config);
     try {
-      const { stdout } = await exec(config.binary, ["--version"], {
-        timeout: 8000,
-      });
+      await adapter.init();
       return [
-        {
-          check: config.id + ":version",
-          ok: true,
-          detail: stdout.trim(),
-        },
+        { check: config.id + ":connection", ok: true, detail: adapter.version },
       ];
     } catch {
-      return [{ check: config.id + ":version", ok: false }];
+      return [
+        {
+          check: config.id + ":connection",
+          ok: false,
+          detail:
+            "Start Herdr Core independently and check its configured endpoint.",
+        },
+      ];
+    } finally {
+      await adapter.close();
     }
   },
 };

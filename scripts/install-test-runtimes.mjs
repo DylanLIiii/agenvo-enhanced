@@ -1,6 +1,12 @@
 // Install pinned public binaries into an explicit test directory. No login or
 // user configuration is copied. Pins are reproducible test baselines.
-import { mkdir, writeFile, chmod, appendFile } from "node:fs/promises";
+import {
+  mkdir,
+  writeFile,
+  chmod,
+  appendFile,
+  copyFile,
+} from "node:fs/promises";
 import { resolve, join, delimiter } from "node:path";
 import { execa } from "execa";
 import { createHash } from "node:crypto";
@@ -16,36 +22,35 @@ const os = { linux: "linux", darwin: "macos", win32: "windows" }[
 const arch = { x64: "x86_64", arm64: "aarch64" }[process.arch];
 if (!os || !arch)
   throw new Error("No native test runtime for this platform/architecture");
-const name = `herdr-${os}-${arch}${process.platform === "win32" ? ".zip" : ""}`;
-const release = await fetch(
-  "https://api.github.com/repos/herdrdev/herdr/releases/tags/v0.9.3",
-  {
-    headers: process.env.GH_TOKEN
-      ? { Authorization: `Bearer ${process.env.GH_TOKEN}` }
-      : {},
-  },
+const manifest = await fetch(
+  "https://releases.herdr.dev/core/0.1.15/manifest.json",
 ).then((r) => {
-  if (!r.ok) throw new Error(`Release lookup: ${r.status}`);
+  if (!r.ok) throw new Error(`Herdr Core manifest: ${r.status}`);
   return r.json();
 });
-const asset = release.assets.find((a) => a.name === name);
-if (!asset?.digest?.startsWith("sha256:"))
-  throw new Error("Release asset must have a SHA-256 digest");
-const response = await fetch(asset.browser_download_url);
-if (!response.ok) throw new Error(`Binary download: ${response.status}`);
+const asset = manifest.targets[`${os}-${arch}`];
+if (!asset?.url || !/^[a-f0-9]{64}$/.test(asset.sha256))
+  throw new Error("Missing Herdr Core asset or SHA-256");
+const response = await fetch(asset.url);
+if (!response.ok) throw new Error(`Herdr Core download: ${response.status}`);
 const bytes = Buffer.from(await response.arrayBuffer());
-if (
-  "sha256:" + createHash("sha256").update(bytes).digest("hex") !==
-  asset.digest
-)
-  throw new Error("Herdr asset digest mismatch");
-if (process.platform === "win32") {
-  const archive = join(root, name);
-  await writeFile(archive, bytes);
-  await execa("tar", ["-xf", archive, "-C", bin]);
-} else {
-  await writeFile(join(bin, "herdr"), bytes);
-  await chmod(join(bin, "herdr"), 0o755);
+if (createHash("sha256").update(bytes).digest("hex") !== asset.sha256)
+  throw new Error("Herdr Core asset digest mismatch");
+const archive = join(
+  root,
+  process.platform === "win32" ? "hc.zip" : "hc.tar.gz",
+);
+await writeFile(archive, bytes);
+await execa("tar", ["-xf", archive, "-C", bin]);
+const executable = join(
+  bin,
+  process.platform === "win32" ? "herdr-core.exe" : "herdr-core",
+);
+if (process.platform === "win32")
+  await copyFile(executable, join(bin, "hc.exe"));
+else {
+  await chmod(executable, 0o755);
+  await execa("ln", ["-sf", "herdr-core", join(bin, "hc")]);
 }
 await execa(
   "npm",

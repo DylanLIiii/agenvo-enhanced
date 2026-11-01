@@ -1,373 +1,169 @@
 import { z } from "zod";
-import { session } from "./services.js";
-const ref = { session };
-const id = z
+
+const terminal = z
   .string()
   .min(1)
-  .max(128)
-  .refine((s) => !s.startsWith("-"));
-const agentName = z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/);
-const target = {
-  ...ref,
-  name: id.describe(
-    "Live agent name or pane ID from agent.list; scoped to this server lifetime.",
+  .max(256)
+  .describe(
+    "Native terminal address or name, including machine/address for a connected machine.",
+  );
+const strings = z.record(z.string(), z.string());
+const target = { terminal };
+const definition = (
+  schema: z.ZodType,
+  readOnly: boolean,
+  description: string,
+) => ({ schema, readOnly, description });
+
+export const methods = {
+  "terminal.list": definition(
+    z.strictObject({ all: z.boolean().optional(), labels: strings.optional() }),
+    true,
+    "List work contexts as native terminals, including those created outside Agenvo and on connected machines. Use all to include finished terminals; inspect machines for disconnected or unavailable remote machines.",
   ),
-};
-const pane = { ...ref, paneId: id };
-const trustRepository = z
-  .boolean()
-  .default(false)
-  .describe(
-    "Trust this repository for this Git command even if owned by another user. Maps to native --trust-repository; does not change Git configuration.",
-  );
-const repository = {
-  workspaceId: id
-    .optional()
-    .describe("Select the repository by a workspace; omit cwd."),
-  cwd: z
-    .string()
-    .min(1)
-    .optional()
-    .describe(
-      "Select the repository by a directory inside it; omit workspaceId. If neither is given, use the configured instance directory.",
-    ),
-  trustRepository,
-};
-const source = (p: Record<string, any>, cwd: string) => [
-  ...(p.workspaceId ? ["--workspace", p.workspaceId] : ["--cwd", p.cwd ?? cwd]),
-  ...(p.trustRepository ? ["--trust-repository"] : []),
-];
-const oneSource = (p: { workspaceId?: string; cwd?: string }) =>
-  !(p.workspaceId && p.cwd);
-const sourceMessage = {
-  message: "Select the repository by workspaceId or cwd, not both",
-};
-const flags = (p: Record<string, any>, names: string[]) =>
-  names.flatMap((name) =>
-    p[name] === undefined ? [] : ["--" + name, String(p[name])],
-  );
-const lines = z.number().int().min(1).max(500).default(80);
-const readSource = z.enum([
-  "visible",
-  "recent",
-  "recent-unwrapped",
-  "detection",
-]);
-const keys = z
-  .array(z.string().min(1).max(64))
-  .min(1)
-  .max(64)
-  .describe(
-    "Native logical keys, for example esc, ctrl+c, enter. Herdr validates the whole list before writing.",
-  );
-const snapshot =
-  "Read output as a bounded terminal snapshot, which may include earlier output, blank lines and TUI decoration. Select or filter result.output inside execute before returning it. Native status does not track every output change or establish task success; snapshots are not durable history or incremental output.";
-const inputKeys =
-  "Submit input as native logical keys to the selected terminal. esc or ctrl+c may interrupt the running agent. accepted confirms input delivery, not task success. Read terminal output to observe the result.";
-// Each method owns its schema, discovery contract and native argument mapping.
-// Session discovery is handled locally; all other calls target an existing server.
-type NativeMethod = {
-  schema: z.ZodType;
-  readOnly: boolean;
-  description: string;
-  argv?: (params: Record<string, any>, cwd: string) => string[];
-};
-export const methods: Record<string, NativeMethod> = {
-  "session.list": {
-    schema: z.strictObject({ cursor: z.string().optional() }),
-    readOnly: true,
-    description:
-      "List native service sessions in the approved instance config root. A session is a running Herdr server, not a conversation thread. Calls address the current native service and targets; names and IDs may be reused after restart. Service startup and shutdown are managed locally.",
-  },
-  "workspace.list": {
-    schema: z.strictObject(ref),
-    readOnly: true,
-    description: "List native workspaces in the selected session.",
-    argv: () => ["workspace", "list"],
-  },
-  "workspace.create": {
-    schema: z.strictObject({
-      ...ref,
+  "terminal.get": definition(
+    z.strictObject(target),
+    true,
+    "Read a terminal's native metadata, program-reported status and exit state. Missing status means the program has not reported one; it is not task success.",
+  ),
+  "terminal.run": definition(
+    z.strictObject({
+      argv: z.array(z.string()).max(64).optional(),
+      line: z.string().max(48000).optional(),
+      name: z.string().optional(),
       cwd: z.string().optional(),
-      label: z.string().max(128).optional(),
+      env: strings.optional(),
+      labels: strings.optional(),
+      on: z.string().optional(),
+      parent: z.string().optional(),
+      no_parent: z.boolean().optional(),
+      outlive_parent: z.boolean().optional(),
+      no_notify: z.boolean().optional(),
+      keep: z.boolean().optional(),
+      rm: z.boolean().optional(),
     }),
-    readOnly: false,
-    description:
-      "Create a workspace containing terminal panes without changing user focus. Returns native workspace and pane IDs.",
-    argv: (p, cwd) => [
-      "workspace",
-      "create",
-      "--cwd",
-      p.cwd ?? cwd,
-      "--label",
-      p.label ?? "Agenvo",
-      "--no-focus",
-    ],
-  },
-  "workspace.get": {
-    schema: z.strictObject({ ...ref, workspaceId: id }),
-    readOnly: true,
-    description: "Read a native workspace and its terminal topology.",
-    argv: (p) => ["workspace", "get", p.workspaceId],
-  },
-  "workspace.close": {
-    schema: z.strictObject({ ...ref, workspaceId: id }),
-    readOnly: false,
-    description:
-      "Close a workspace and its terminal panes, stopping the programs running in them.",
-    argv: (p) => ["workspace", "close", p.workspaceId],
-  },
-  "worktree.list": {
-    schema: z
-      .strictObject({ ...ref, ...repository })
-      .refine(oneSource, sourceMessage),
-    readOnly: true,
-    description:
-      "List the Git worktrees of a repository, including ones created outside Herdr, with the workspace each is open in.",
-    argv: (p, cwd) => ["worktree", "list", ...source(p, cwd)],
-  },
-  "worktree.create": {
-    schema: z
-      .strictObject({
-        ...ref,
-        ...repository,
-        branch: z.string().min(1).max(256).optional(),
-        base: z.string().min(1).max(256).optional(),
-        path: z.string().min(1).max(4096).optional(),
-        label: z.string().max(128).optional(),
-      })
-      .refine(oneSource, sourceMessage),
-    readOnly: false,
-    description:
-      "Create a Git worktree and open it as a workspace without changing user focus. Retain returned native IDs; inspect worktree.list after unknown confirmation before retrying.",
-    argv: (p, cwd) => [
-      "worktree",
-      "create",
-      ...source(p, cwd),
-      ...flags(p, ["branch", "base", "path", "label"]),
-      "--no-focus",
-    ],
-  },
-  "worktree.open": {
-    schema: z
-      .strictObject({
-        ...ref,
-        ...repository,
-        path: z.string().min(1).max(4096).optional(),
-        branch: z.string().min(1).max(256).optional(),
-        label: z.string().max(128).optional(),
-      })
-      .refine(oneSource, sourceMessage)
-      .refine((p) => Boolean(p.path) !== Boolean(p.branch), {
-        message: "Select the worktree by exactly one of path or branch",
-      }),
-    readOnly: false,
-    description:
-      "Open an existing Git worktree as a workspace without changing user focus. Select exactly one of path or branch.",
-    argv: (p, cwd) => [
-      "worktree",
-      "open",
-      ...source(p, cwd),
-      ...flags(p, ["path", "branch", "label"]),
-      "--no-focus",
-    ],
-  },
-  "worktree.remove": {
-    schema: z.strictObject({
-      ...ref,
-      workspaceId: id,
-      force: z.boolean().default(false),
-      trustRepository,
+    false,
+    "Create work context by starting a program or template in a new terminal. argv and execution settings pass to Herdr Core unchanged. A template may send its first message before returning; inspect first_message. After an unknown result inspect terminal.list before retrying.",
+  ),
+  "terminal.read": definition(
+    z.strictObject({
+      ...target,
+      lines: z.number().int().min(0).max(500).optional(),
     }),
-    readOnly: false,
-    description:
-      "Remove the Git worktree checkout behind a linked worktree workspace and close the workspace. The branch remains. force discards uncommitted changes; preserve required work first.",
-    argv: (p) => [
-      "worktree",
-      "remove",
-      "--workspace",
-      p.workspaceId,
-      ...(p.force ? ["--force"] : []),
-      ...(p.trustRepository ? ["--trust-repository"] : []),
-    ],
-  },
-  "tab.create": {
-    schema: z.strictObject({
-      ...ref,
-      workspaceId: id,
-      cwd: z.string().optional(),
-      label: z.string().max(128).optional(),
-      env: z
-        .record(
-          z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/),
-          z.string().max(4096),
-        )
-        .refine((env) => Object.keys(env).length <= 32)
-        .default({}),
-    }),
-    readOnly: false,
-    description:
-      "Create a tab with a fresh shell pane in a workspace without changing user focus, for example to start an agent beside existing panes. Returns the tab and its root pane.",
-    argv: (p) => [
-      "tab",
-      "create",
-      "--workspace",
-      p.workspaceId,
-      ...flags(p, ["cwd", "label"]),
-      ...Object.entries(p.env).flatMap(([k, v]) => ["--env", `${k}=${v}`]),
-      "--no-focus",
-    ],
-  },
-  "tab.close": {
-    schema: z.strictObject({ ...ref, tabId: id }),
-    readOnly: false,
-    description:
-      "Close a tab and its terminals. Preserve required output and artifacts before cleanup.",
-    argv: (p) => ["tab", "close", p.tabId],
-  },
-  "pane.list": {
-    schema: z.strictObject(ref),
-    readOnly: true,
-    description:
-      "List live terminal panes; IDs are scoped to the server lifetime.",
-    argv: () => ["pane", "list"],
-  },
-  "pane.get": {
-    schema: z.strictObject(pane),
-    readOnly: true,
-    description:
-      "Read terminal pane metadata and native status. Native status does not establish task success.",
-    argv: (p) => ["pane", "get", p.paneId],
-  },
-  "pane.process-info": {
-    schema: z.strictObject(pane),
-    readOnly: true,
-    description:
-      "Read native process information for a pane. Use with output to inspect interruption; process presence or absence does not establish task success.",
-    argv: (p) => ["pane", "process-info", "--pane", p.paneId],
-  },
-  "pane.run": {
-    schema: z.strictObject({ ...pane, command: z.string().max(48000) }),
-    readOnly: false,
-    description:
-      "Submit input as command text followed by Enter to a terminal pane. accepted confirms input delivery, not command completion or exit status.",
-    argv: (p) => ["pane", "run", p.paneId, p.command],
-  },
-  "pane.read": {
-    schema: z.strictObject({
-      ...pane,
-      lines,
-      source: readSource.default("recent-unwrapped"),
-    }),
-    readOnly: true,
-    description: snapshot,
-    argv: (p) => [
-      "pane",
-      "read",
-      p.paneId,
-      "--lines",
-      String(p.lines),
-      "--source",
-      p.source,
-    ],
-  },
-  "pane.send-text": {
-    schema: z.strictObject({ ...pane, text: z.string().min(1).max(48000) }),
-    readOnly: false,
-    description:
-      "Submit input as literal text without Enter to a terminal pane, including responses to requests for user input. Use pane.send-keys to send Enter.",
-    argv: (p) => ["pane", "send-text", p.paneId, p.text],
-  },
-  "pane.send-keys": {
-    schema: z.strictObject({ ...pane, keys }),
-    readOnly: false,
-    description: inputKeys,
-    argv: (p) => ["pane", "send-keys", p.paneId, ...p.keys],
-  },
-  "agent.list": {
-    schema: z.strictObject(ref),
-    readOnly: true,
-    description:
-      "List running agents, including agents started outside Agenvo. Use a returned name or pane ID with agent methods. Each agent runs in a terminal pane; its name is not a durable conversation ID.",
-    argv: () => ["agent", "list"],
-  },
-  "agent.start": {
-    schema: z.strictObject({
-      ...ref,
-      name: agentName,
-      paneId: id,
-      kind: z
-        .string()
-        .min(1)
-        .describe(
-          "Native Herdr agent kind, for example pi or codex. Herdr validates support.",
-        ),
-      args: z.array(z.string()).max(64).default([]),
-      timeoutMs: z.number().int().min(3001).max(300000).default(30000),
-    }),
-    readOnly: false,
-    description:
-      "Create a work context by starting an agent in an existing terminal pane. Pass native agent arguments in args, including execution settings chosen using the instance context. Starts asynchronously. Poll agent.get using the returned session and name. A startup timeout does not stop the process; rediscover agents by pane ID if the launch name is gone. Do not repeat after lost confirmation. Startup tracking is connector-local; rediscover native agents after reconnect.",
-    argv: (p) => [
-      "agent",
-      "start",
-      p.name,
-      "--kind",
-      p.kind,
-      "--pane",
-      p.paneId,
-      "--timeout",
-      String(p.timeoutMs),
-      "--",
-      ...p.args,
-    ],
-  },
-  "agent.prompt": {
-    schema: z.strictObject({
+    true,
+    "Read output as the native terminal screen and optional history. The result includes text, complete, how and why; it is not a durable conversation transcript.",
+  ),
+  "terminal.send": definition(
+    z.strictObject({
       ...target,
       text: z.string().max(48000),
+      force: z.boolean().optional(),
+      if: z.enum(["idle", "working"]).optional(),
     }),
-    readOnly: false,
-    description:
-      "Submit input as a prompt to a running agent. Native Herdr rejects prompts while a request for user input is blocking; read agent.explain and terminal output to choose text or key input. accepted does not establish task success.",
-    argv: (p) => ["agent", "prompt", p.name, p.text],
-  },
-  "agent.get": {
-    schema: z.strictObject(target),
-    readOnly: true,
-    description:
-      "Read agent metadata, native status and startup state. idle, done and unknown do not establish task success. Read agent.explain and terminal output for requests for user input.",
-    argv: (p) => ["agent", "get", p.name],
-  },
-  "agent.read": {
-    schema: z.strictObject({
+    false,
+    "Submit input by pasting text and pressing Enter. Core refuses blocked programs unless force is set; use it only when answering the displayed request. Acceptance does not prove completion.",
+  ),
+  "terminal.keys": definition(
+    z.strictObject({
       ...target,
-      lines,
-      source: readSource.default("recent-unwrapped"),
+      keys: z.array(z.string().min(1).max(64)).min(1).max(64),
     }),
-    readOnly: true,
-    description: snapshot,
-    argv: (p) => [
-      "agent",
-      "read",
-      p.name,
-      "--lines",
-      String(p.lines),
-      "--source",
-      p.source,
-    ],
-  },
-  "agent.explain": {
-    schema: z.strictObject(target),
-    readOnly: true,
-    description:
-      "Read native detection diagnostics for an agent, including blocked or unknown status and requests for user input. These diagnostics are not structured request IDs or proof of task success.",
-    argv: (p) => ["agent", "explain", p.name, "--json"],
-  },
-  "agent.send-keys": {
-    schema: z.strictObject({ ...target, keys }),
-    readOnly: false,
-    description: inputKeys,
-    argv: (p) => ["agent", "send-keys", p.name, ...p.keys],
-  },
-};
+    false,
+    "Submit input as native keys, such as enter, esc or ctrl+c, to respond or interrupt. The effect depends on the terminal program.",
+  ),
+  "terminal.interrupt": definition(
+    z.strictObject({ ...target, timeout: z.number().min(0).max(5).default(3) }),
+    false,
+    "Interrupt by sending the native stop key and report the observed effect; it does not escalate or establish task success. Observation defaults to 3 seconds to fit the Relay deadline.",
+  ),
+  "terminal.kill": definition(
+    z.strictObject(target),
+    false,
+    "End a terminal program, escalating from hangup to kill. Preserve needed output first.",
+  ),
+  "terminal.rm": definition(
+    z.strictObject(target),
+    false,
+    "Remove a finished terminal and its retained record.",
+  ),
+  "terminal.keep": definition(
+    z.strictObject({ ...target, keep: z.boolean() }),
+    false,
+    "Set whether a lost terminal is recovered as a fresh shell; the original command is never rerun.",
+  ),
+  "terminal.label": definition(
+    z.strictObject({ ...target, labels: strings }),
+    false,
+    "Set or remove native terminal labels; an empty value removes a label.",
+  ),
+  "templates.list": definition(
+    z.strictObject({}),
+    true,
+    "List native templates available to terminal.run.",
+  ),
+  "machine.list": definition(
+    z.strictObject({}),
+    true,
+    "List machines already connected to this Herdr Core; their terminals are included in terminal.list.",
+  ),
+  "machine.connect": definition(
+    z.strictObject({ machine: z.string().min(1).max(256) }),
+    false,
+    "Dial an already registered machine now instead of at its next retry, such as after a login. It does not add a machine or change its configuration. Native dialing waits up to 30 seconds; past this connector's socket wait the call returns unknown, so read machine.list for the current state.",
+  ),
+  "server.status": definition(
+    z.strictObject({}),
+    true,
+    "Read this Herdr Core's native identity, version, pid, uptime and terminal counts, including every holder. Holder and counts describe the shared Core, not one agent's task.",
+  ),
+  "machine.exec": definition(
+    z.strictObject({
+      argv: z.array(z.string()).max(64).optional(),
+      line: z.string().max(48000).optional(),
+      cwd: z.string().optional(),
+      env: strings.optional(),
+      input: z.string().optional(),
+      on: z.string().optional(),
+      timeout: z.number().min(0).max(600).optional(),
+    }),
+    false,
+    "Run one program here or on a connected machine without a terminal: argv runs as given, line runs in that machine's shell. It returns the exit code and stdout/stderr as base64; a nonzero exit or timeout is a result, not an error. Everything it starts ends with it, at its exit, at timeout (native default 60 seconds), or when the caller leaves. This is not a work context: no address, output screen or events. A run past this connector's 8.5-second wait returns unknown and Core ends the program with its caller, so use terminal.run for long work.",
+  ),
+  "file.read": definition(
+    z.strictObject({
+      path: z.string().min(1),
+      cwd: z.string().optional(),
+      offset: z.number().int().min(0).optional(),
+      limit: z.number().int().min(0).optional(),
+      on: z.string().optional(),
+    }),
+    true,
+    "Read a text file here or on a connected machine, from line offset, at most limit lines. The result reports the first and last line given and the file's total lines; relative paths start at cwd. Native Core allows 8 MB, but this connector's frame is 64 KB: read a large file in parts with offset and limit, or the result is refused as too large.",
+  ),
+  "file.write": definition(
+    z.strictObject({
+      path: z.string().min(1),
+      data: z.string().max(45000),
+      cwd: z.string().optional(),
+      on: z.string().optional(),
+    }),
+    false,
+    "Replace a whole file here or on a connected machine, creating missing folders. data is the complete content as base64, at most about 33 KB of file after base64 and this connector's 64 KB frame; larger files need file.edit or another transport. A reader sees the old or new file, never a partial one; an existing file keeps its mode and a symlink is followed. Read the previous content first: this overwrites it.",
+  ),
+  "file.edit": definition(
+    z.strictObject({
+      path: z.string().min(1),
+      edits: z
+        .array(z.strictObject({ old: z.string(), new: z.string() }))
+        .min(1)
+        .max(64),
+      cwd: z.string().optional(),
+      on: z.string().optional(),
+    }),
+    false,
+    "Replace exact text in a file here or on a connected machine. Each old must occur exactly once in the file as it was, and edits must not overlap; all are made or none. No fuzzy or regular-expression matching. The whole request must fit this connector's 64 KB frame.",
+  ),
+} satisfies Record<
+  string,
+  { schema: z.ZodType; readOnly: boolean; description: string }
+>;

@@ -1,53 +1,23 @@
-# Herdr Connector
+# Herdr Core Connector
 
-Herdr Connector 附着独立运行的原生服务，暴露整个获准实例中的 Agent，包括其他客户端创建的 Agent。Connector 只负责连接，不启动或停止 Herdr 服务。共同契约见 [MCP 与 Connector 设计原则](agent-management.zh-CN.md)，调用方式见[管理指南](../docs/management.zh-CN.md#herdr)。
+Herdr Connector 附着一个独立运行的 Herdr Core session，不启动或停止 Core。获准实例覆盖该 Core 中所有终端，包括其他客户端创建的终端和 Core 已连接机器上的终端。不同 session 配置为不同实例。端点是 Unix socket 或 Windows 命名管道；自定义端点需显式指定，进入 scope 和 fingerprint。
 
-## 资源与调用
+## 原生契约
 
-Herdr 的 work context 是 terminal pane 内运行的 agent；session 指原生服务进程，workspace 指终端容器。保留这些资源及其原生方法名，不把它们统一改称 thread。
+接口依据是 [Herdr Core 0.1.15 OpenRPC](https://github.com/herdrdev/herdr-core/blob/v0.1.15/schema/released.openrpc.json) 和 [API 与事件](https://github.com/herdrdev/herdr-core/blob/v0.1.15/schema/README.md)。版本用于复现，不是白名单；握手检查协议 generation 1。使用 plain JSON-RPC，每次调用独立连接，不执行 `hc connect`（它可能启动 Core）。
 
-已知 session 时直接调用原生方法，`session.list` 只用于服务发现。调用按 session 和原生名称或 ID 操作当前目标；服务重启后标识可能复用，调用者按需重新查询原生状态。创建工作上下文对应 `agent.start`，需要已有 pane，可能只返回 starting 与包含 session、name 的后续查询键。
+`terminal.run` 创建终端并运行程序或模板，原样传递执行参数；模板可能发送首条消息，结果的 `first_message` 需要检查。`terminal.list/get/read/send/keys/interrupt/kill/rm/keep/label` 直接使用原生终端地址，`machine.list` 和 `templates.list` 提供发现。`terminal.read` 的 `complete`、`how` 和 `why` 描述快照边界；没有完整会话历史保证。`terminal.send` 默认拒绝 blocked，调用者检查问题后可显式 force。OSC 7501 状态只来自程序；没有报告不等于 idle，done 不等于业务成功。
 
-调用参数和结果不暴露 `backendGeneration`。调用前的服务代际比较只能发现此前的服务重启，不能阻止检查与执行之间重启，也不能识别同一服务内名称所指目标的变化。统一沿用原生当前目标语义，避免所有操作都依赖额外查询或传递代际。Connector 内部仍按 endpoint 代际隔离启动记录、重建事件订阅，并在事件中携带 generation；这些连接状态不构成调用前置条件。
+不暴露 Core 的 `server.stop`、`server.restart`、`machine.add`、`machine.rename`、`machine.rm` 和 `doc.*`：前两者会停掉其他客户端正在运行的共享 Core，中间三个改变实例已批准的访问边界，`doc.*` 是 Core 自己的 KV 存储而非终端工作上下文。
 
-`agent.prompt`、`agent.send-keys` 使用原生 name，pane 输入使用 paneId。`agent.read`、`pane.read` 返回终端快照；历史不可读时，调用者可显式选择 visible。终端中的问题通过文本和按键回答，不模拟结构化请求 ID 或持久会话历史。
+`server.status` 提供 Core 的原生身份、版本、pid、uptime、holder 和终端计数，供调用者判断共享 Core 的状态。`machine.connect` 只对已注册机器立即发起拨号，不新增或修改机器配置；原生拨号最多等待 30 秒，超出 Relay 单次调用期限时本次调用返回 unknown，调用者应以 `machine.list` 的当前状态为准。
 
-读取结果的筛选由调用者在 `execute` 内完成，再返回所需文本，避免装饰和不相关内容进入 context。Connector 保留原始快照，不增加固定的有损压缩策略或读取游标。调用者可随时选择原文检查格式；过滤不能恢复读取窗口外的内容。原生状态用于选择观察时机，不代表输出是否变化；按输入片段截取只能提供启发式窗口，不能承诺完整回复或增量历史。管理指南提供中英文示例，`tests/system/herdr-read.test.ts` 经真实 MCP 和隔离 Herdr 验证示例筛选及原始读取。
+`machine.exec` 在没有终端的情况下运行一个程序，原样转发 `argv`/`line`、`cwd`、`env`、`input`、`on` 和 `timeout`；返回原生退出码与 base64 编码的 stdout/stderr，非零退出和超时都是结果而不是错误。它不是 work context：没有终端地址、屏幕或事件。Core 在调用方离开时结束该进程及其子进程，而 Connector 的 socket 等待是 8.5 秒，因此更长的调用返回 unknown，进程同时被 Core 结束，不会继续在后台运行。需要长时间运行的工作应通过 `terminal.run` 建立终端。
 
-`agent.start` 接受原生 `kind` 字符串，由 Herdr 判断支持范围；`args` 原样转发，不维护 Agent 类型白名单、不注入权限参数，也不拒绝调用者的权限设置。配置者通过实例 `context` 声明执行约定，调用者选择对应的原生参数；Agenvo 不解析或强制执行这些声明。权限行为由原生 Agent 的参数和配置决定。异步启动与后续查询沿用现有跟踪机制。
+`file.read/write/edit` 转发原生 `path`、`cwd`、`on` 和 `offset`/`limit`/`data`/`edits`。原生上限是 8 MB，但 Agenvo 的连接帧是 64 KB：`file.write` 的 base64 数据在 schema 中限制为 45000 字符（约 33 KB 文件），超出的读取由 `bounded` 转换为 `result_too_large`。这些限制来自 Agenvo 传输，不是 Core 行为，描述中明确说明，避免调用者按原生上限规划。`file.edit` 要求每个 `old` 在原文件中恰好出现一次且编辑不重叠，全部成功或全部不写。
 
-`worktree.list/create/open/remove` 直接映射 Herdr 的 Git worktree 操作，`tab.create/close` 管理 workspace 内的终端容器。它们为 `agent.start` 提供检出和 pane，不把这些资源等同为 work context。列表包括外部创建的 worktree，删除检出保留分支；`force` 保留原生丢弃未提交改动的语义。创建与打开固定使用 `--no-focus`，不抢占用户焦点。
+`events.subscribe` 的快照用于建立观察；通知转发原生 type、seq 和 terminal 地址。订阅断开、重连或 `missed` 时发送 `agenvo.resync_required`，调用者重新读取；不承诺断线期间事件重放。不转发 heartbeat。当前 `serviceId` 为 `default`，终端地址为 `threadId`。
 
-worktree 方法保留默认关闭的 `trustRepository`，映射原生 `--trust-repository`。Herdr 仅为本次 Git 命令设置解析后仓库的 `safe.directory`，不会修改 Git 配置；调用者决定是否信任仓库。Connector 不增加批准状态、重试或清理编排。参数 schema、原生结果和错误沿用适配器契约。
+## 验证
 
-## 原生接口依据
-
-接口基线为 Herdr 0.9.3，仅用于复现与追溯，不作为运行时版本白名单。
-
-源码固定在 commit `7b116c05bfda646af39d2524c54e70c751f57ee8`：[Agent 类型](https://github.com/herdrdev/herdr/blob/7b116c05bfda646af39d2524c54e70c751f57ee8/src/api/schema/agents.rs)、[状态定义](https://github.com/herdrdev/herdr/blob/7b116c05bfda646af39d2524c54e70c751f57ee8/src/api/schema/common.rs)、[Agent API](https://github.com/herdrdev/herdr/blob/7b116c05bfda646af39d2524c54e70c751f57ee8/src/app/api/agents.rs)、[订阅实现](https://github.com/herdrdev/herdr/blob/7b116c05bfda646af39d2524c54e70c751f57ee8/src/api/server.rs)。
-
-| 原生能力 | 映射约束 |
-| --- | --- |
-| `agent.list/get` | 保留 terminal、pane、workspace 和可选 agent_session；名称会复用 |
-| `workspace.create`、`agent.start` | 创建资源与发送提示词分开，启动请求不代表 Agent 已就绪 |
-| `agent.prompt` | 向终端写入输入；确认不证明某轮完成 |
-| `agent.read`、`pane.read` | 返回终端快照，不能冒充完整会话历史 |
-| `agent.wait`、状态计数 | `completion_seq` 表示工作结束后的空闲转换，不是持久任务 ID、退出码或成功证明 |
-| `events.subscribe` | 没有公开 cursor/since 参数；内部 sequence 不构成断线重放契约 |
-| `agent.send-keys`、`pane.send-keys` | 效果取决于终端程序，不能保证 Thread 中断 |
-| `workspace.close` | 关闭资源，不等于归档会话 |
-| `worktree.list/create/open/remove`、`tab.create/close` | 原生工作目录与终端容器；Git 检出删除与 Agent 会话生命周期分别处理 |
-
-`interactive_ready` 表示 Herdr 受管启动已进入 Active 阶段；它不是所有原生 Agent 的发送能力开关。外部启动、或启动确认超时后仍存活的 Codex、Claude、Devin 可以通过 `agent.prompt` 接收输入。Agenvo 对这些已支持的 Agent 不以该字段为前提，仍在发送前检查身份，并保留 Herdr 对前台进程、启动中状态和交互阻塞的检查。
-
-原生启动确认超时会清除名称和受管启动记录，不保证进程退出。查询应保留原始启动错误；若同一目标已返回有效的活跃身份，超时或等待交互的记录不能掩盖该身份。名称失效时，返回所属 service 与预期 pane，供调用方重新发现并检查现有 Agent；不能盲目再次创建。
-
-Herdr 的 [Agent 恢复逻辑](https://github.com/herdrdev/herdr/blob/7b116c05bfda646af39d2524c54e70c751f57ee8/src/agent_resume.rs)依赖具体 Agent 类型。增加统一恢复接口前，需验证其会话标识、恢复参数和失败语义。
-
-## 验证依据
-
-`tests/system/herdr-events.test.ts` 通过真实 MCP 和隔离 Herdr 验证服务发现、custom Agent 发现、问题读取、输入与结果读取，以及服务重启后的事件订阅更新和当前 pane 的读写。`tests/system/herdr-worktrees.test.ts` 验证已知 session 时无需预先调用 `session.list` 即可操作工作区。
-
-更新适配器时，通过[适配器和系统测试](../CONTRIBUTING.zh-CN.md)验证真实原生行为；固定版本只用于复现。
-
-`tests/system/herdr-worktrees.test.ts` 经真实 MCP 的 search/execute 和隔离 Herdr 验证能力发现、外部 worktree 打开、tab 环境变量、删除时保留分支、脏检出的原生拒绝与显式 force。参数测试覆盖各 worktree 方法的 trustRepository 默认关闭和显式开启。
+`tests/system/herdr-events.test.ts` 使用隔离 Core 和 OSC 7501 fixture，经真实 MCP 验证外部终端发现、新终端创建、问题读取、blocked 拒绝及显式回答、状态事件，以及 Connector 和 Core 重启后继续交互。平台测试使用固定版本；不使用个人凭据或会话。

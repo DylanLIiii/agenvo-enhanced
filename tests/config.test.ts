@@ -1,4 +1,5 @@
 import { instanceSchema } from "@agenvo/protocol";
+import { instanceConfigSchema as herdrConfigSchema } from "../apps/herdr/src/config.js";
 import { configDir } from "@agenvo/connector/config";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -49,9 +50,7 @@ test("free-form instance context survives discovery without changing the approve
   const configurations = [
     {
       kind: "herdr",
-      binary: "/bin/herdr",
-      cwd: "/work",
-      configRoot: "/config/herdr",
+      endpoint: "/config/herdr-core.sock",
     },
     {
       kind: "codex",
@@ -107,8 +106,10 @@ test("free-form instance context survives discovery without changing the approve
       "test",
     );
     assert.equal(updated.fingerprint, original.fingerprint);
+    const schema =
+      config.kind === "herdr" ? herdrConfigSchema : instanceConfigSchema;
     assert.equal(
-      instanceConfigSchema.safeParse({
+      schema.safeParse({
         ...config,
         context: { preferences: "worktree" },
       }).success,
@@ -128,7 +129,7 @@ test("free-form instance context survives discovery without changing the approve
   const original = await descriptor(config, true, "test");
   const changed = instanceConfigSchema.parse({
     ...config,
-    configRoot: "/other/herdr",
+    endpoint: "/other/herdr-core.sock",
   });
   assert.notEqual(
     (await descriptor(changed, true, "test")).fingerprint,
