@@ -16,7 +16,9 @@ Herdr Connector 附着一个独立运行的 Herdr Core session，不启动或停
 
 `file.read/write/edit` 转发原生 `path`、`cwd`、`on` 和 `offset`/`limit`/`data`/`edits`。原生上限是 8 MB，但 Agenvo 的连接帧是 64 KB：`file.write` 的 base64 数据在 schema 中限制为 45000 字符（约 33 KB 文件），超出的读取由 `bounded` 转换为 `result_too_large`。这些限制来自 Agenvo 传输，不是 Core 行为，描述中明确说明，避免调用者按原生上限规划。`file.edit` 要求每个 `old` 在原文件中恰好出现一次且编辑不重叠，全部成功或全部不写。
 
-`events.subscribe` 的快照用于建立观察；通知转发原生 type、seq 和 terminal 地址。订阅断开、重连或 `missed` 时发送 `agenvo.resync_required`，调用者重新读取；不承诺断线期间事件重放。不转发 heartbeat。当前 `serviceId` 为 `default`，终端地址为 `threadId`。
+原生响应和单条订阅消息的解析上限为 16 MiB，与 Core framed 消息上限一致；订阅初始快照包含全部匹配终端，不能套用 Agenvo 的 64 KiB 返回帧上限。成功解析后的调用结果仍由 `bounded` 限制；超过解析上限的响应返回 `result_too_large`，只读调用标为 rejected，写入调用保留 unknown，避免暗示写入未执行。
+
+`events.subscribe` 的快照用于建立观察；通知转发原生 type、seq 和 terminal 地址。订阅中断时发送一次 `agenvo.resync_required`，持续失败按 1、2、4 秒退避，最多 30 秒，恢复后重置；重连成功或 `missed` 时也要求调用者重新读取，不承诺断线期间事件重放。实例可用性以 `hello` 是否成功为准，订阅故障不阻断健康的 RPC；每次握手更新版本，并同步到 Relay 和本地状态。不转发 heartbeat。当前 `serviceId` 为 `default`，终端地址为 `threadId`。
 
 ## 验证
 

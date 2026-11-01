@@ -16,7 +16,7 @@
 agenvo-herdr instance add --id work
 ```
 
-非默认 session 或自定义 `HC_SOCKET` / `socket` 配置需通过 `--endpoint` 指定实际 Unix socket 或 Windows 命名管道。默认端点遵循 runtime 目录及 state 目录回退规则；Connector 不自动读取 Core 的自定义配置。每个获准实例覆盖对应 Core 及其已连接机器。Connector 不启动或停止 Core。旧 Herdr TUI 实例配置和方法不兼容。停止 Connector，从其 `config.json` 删除旧实例条目，使用 `instance add` 添加 Core 实例，重启 Connector 并批准新的 scope；保留配对凭据。
+非默认 session 或自定义 `HC_SOCKET` / `socket` 配置需通过 `--endpoint` 指定实际 Unix socket 或 Windows 命名管道。相对 socket 路径以 CLI 当前目录解析。默认端点遵循 runtime 目录及 state 目录回退规则；Connector 不自动读取 Core 的自定义配置。每个获准实例覆盖对应 Core 及其已连接机器。Connector 不启动或停止 Core。旧 Herdr TUI 实例配置和方法不兼容。停止 Connector，从其 `config.json` 删除旧实例条目，使用 `instance add` 添加 Core 实例，重启 Connector 并批准新的 scope；保留配对凭据。
 
 除终端外，实例还开放 Core 的 `server.status`、`machine.list`、`machine.connect`、`machine.exec` 和 `file.read/write/edit`。`machine.exec` 与文件方法在本机或已连接机器上不经过终端执行，不是 work context，也不产生事件。`machine.exec` 启动的进程及其子进程随调用结束：超过 Connector 8.5 秒 socket 等待的调用返回 `unknown`，Core 同时结束该程序；长时间运行的工作应改用终端。Agenvo 连接帧为 64 KB，`file.write` 因此只能写入约 33 KB 内容，更大的读取返回 `result_too_large`；改用 `file.edit` 或用 `offset` 与 `limit` 分段读取。Core 的 `server.stop`、`server.restart`、`machine.add/rename/rm` 和 `doc.*` 不开放。
 

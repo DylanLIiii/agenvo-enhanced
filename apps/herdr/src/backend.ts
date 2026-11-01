@@ -1,4 +1,4 @@
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
 import { Fault } from "@agenvo/protocol";
@@ -36,7 +36,10 @@ export const backend: Backend<HerdrConfig> = {
       id: options.id,
       label: options.label ?? options.id,
       kind: "herdr",
-      endpoint,
+      endpoint:
+        typeof endpoint === "string" && !isAbsolute(endpoint)
+          ? resolve(endpoint)
+          : endpoint,
     });
   },
   async create(config) {

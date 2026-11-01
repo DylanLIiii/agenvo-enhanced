@@ -1,6 +1,9 @@
 import { connect, type Socket } from "node:net";
 import { bytes, Fault } from "@agenvo/protocol";
 
+// Match Core's framed-message ceiling, including subscription snapshots.
+const MAX_MESSAGE = 16 * 1024 * 1024;
+
 // One plain JSON-RPC connection per call; never start the native core.
 export function request(
   endpoint: string,
@@ -30,7 +33,14 @@ export function request(
     });
     socket.on("data", (chunk) => {
       buffer += chunk;
-      if (bytes(buffer) > 1024 * 1024) return socket.destroy();
+      if (bytes(buffer) > MAX_MESSAGE)
+        return finish(
+          new Fault(
+            "result_too_large",
+            "Herdr Core response exceeds the connector limit; use narrower reads (offset/limit, lines).",
+            readOnly ? "rejected" : "unknown",
+          ),
+        );
       const end = buffer.indexOf("\n");
       if (end < 0) return;
       try {
@@ -102,11 +112,11 @@ export function subscribe(
   );
   socket.on("data", (chunk) => {
     buffer += chunk;
-    if (bytes(buffer) > 1024 * 1024) return socket.destroy();
     let end: number;
     while ((end = buffer.indexOf("\n")) >= 0) {
       const line = buffer.slice(0, end);
       buffer = buffer.slice(end + 1);
+      if (bytes(line) > MAX_MESSAGE) return socket.destroy();
       try {
         const packet = JSON.parse(line);
         if (packet.jsonrpc !== "2.0" || packet.error)
@@ -118,6 +128,7 @@ export function subscribe(
         return;
       }
     }
+    if (bytes(buffer) > MAX_MESSAGE) socket.destroy();
   });
   socket.on("error", () => {});
   socket.on("close", closed);

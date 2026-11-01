@@ -5,6 +5,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { getCACertificates, setDefaultCACertificates } from "node:tls";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
+import { createServer, type Socket } from "node:net";
 import { run } from "@agenvo/connector";
 import { atomicJson } from "@agenvo/connector/config";
 import { digest } from "@agenvo/protocol";
@@ -137,3 +138,84 @@ for (const code of ["EPERM", "ENOSPC"]) {
     },
   );
 }
+
+test(
+  "Herdr recovery publishes the current Core version to MCP and status",
+  { timeout: 20000 },
+  async (t) => {
+    const lab = await eventsLab(t);
+    const endpoint =
+      process.platform === "win32"
+        ? `\\\\.\\pipe\\agenvo-version-${process.pid}`
+        : join(lab.root, "core.sock");
+    const sockets = new Set<Socket>();
+    let subscription: Socket | undefined;
+    let version = "0.1.15";
+    const server = createServer((socket) => {
+      sockets.add(socket);
+      socket.on("close", () => sockets.delete(socket));
+      socket.on("error", () => {});
+      let buffer = "";
+      socket.on("data", (data) => {
+        buffer += data;
+        if (!buffer.includes("\n")) return;
+        const call = JSON.parse(buffer);
+        const result =
+          call.method === "hello"
+            ? { generation: 1, version }
+            : { seq: 1, terminals: [] };
+        const reply =
+          JSON.stringify({ jsonrpc: "2.0", id: call.id, result }) + "\n";
+        if (call.method === "events.subscribe") {
+          subscription = socket;
+          socket.write(reply);
+        } else socket.end(reply);
+      });
+    });
+    lab.cleanup(async () => {
+      for (const socket of sockets) socket.destroy();
+      if (server.listening)
+        await new Promise<void>((resolve, reject) =>
+          server.close((error) => (error ? reject(error) : resolve())),
+        );
+    });
+    const deviceId = await lab.connect([
+      { kind: "herdr", id: "herdr", label: "Test Core", endpoint },
+    ]);
+    const readInstance = async () => {
+      const result = await lab.rpc("tools/call", {
+        name: "search",
+        arguments: { query: "", deviceId, instanceId: "herdr" },
+      });
+      return JSON.parse(result.content[0].text).result.items[0];
+    };
+    const offline = await readInstance();
+    assert.equal(offline.backendVersion, "unknown");
+    assert.equal(offline.available, false);
+    await new Promise<void>((resolve) => server.listen(endpoint, resolve));
+    await until(
+      readInstance,
+      (instance) => instance.backendVersion === "0.1.15" && instance.available,
+    );
+    const dir = (await fs.readdir(lab.root)).find((name) =>
+      name.startsWith("connector-"),
+    )!;
+    const readStatus = async () =>
+      JSON.parse(await fs.readFile(join(lab.root, dir, "status.json"), "utf8"));
+    await until(
+      readStatus,
+      (status) => status.instances[0].backendVersion === "0.1.15",
+    );
+    await until(() => subscription, Boolean);
+    version = "0.1.16";
+    subscription!.destroy();
+    await until(
+      readInstance,
+      (instance) => instance.backendVersion === "0.1.16" && instance.available,
+    );
+    await until(
+      readStatus,
+      (status) => status.instances[0].backendVersion === "0.1.16",
+    );
+  },
+);

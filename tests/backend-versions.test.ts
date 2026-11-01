@@ -2,7 +2,7 @@ import { codexServer } from "./support/codex-server.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, writeFile, rm, realpath } from "node:fs/promises";
-import { join, delimiter } from "node:path";
+import { join, delimiter, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { backend as codex } from "../apps/codex-app-server/src/backend.js";
 import { backend as herdr } from "../apps/herdr/src/backend.js";
@@ -66,4 +66,9 @@ console.log(process.argv.includes('--version') ? 'fixture 9.0.0' : 'Logged in');
     endpoint: join(root, "missing.sock"),
   });
   assert.equal((await herdr.doctor(herdrConfig))[0].ok, false);
+  const relative = await herdr.configure(
+    { id: "relative", endpoint: "./run/core.sock" },
+    root,
+  );
+  assert.equal(relative.endpoint, resolve("./run/core.sock"));
 });

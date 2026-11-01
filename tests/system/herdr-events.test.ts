@@ -200,7 +200,7 @@ test(
     const unknownMachine = nativeOutcome(noMachine);
     assert.equal(unknownMachine.execution, "rejected");
     assert.equal(unknownMachine.error.native.data.kind, "machine_unknown");
-    await writeFile(file, "x".repeat(100000));
+    await writeFile(file, "x".repeat(2 * 1024 * 1024));
     const tooLarge = await lab.rpc("tools/call", {
       name: "execute",
       arguments: callCode({

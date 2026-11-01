@@ -59,8 +59,12 @@ export function connectRelay({
     let changed = false;
     for (const [id, adapter] of adapters) {
       const instance = instances.get(id)!;
-      if (instance.available !== adapter.available) {
+      if (
+        instance.available !== adapter.available ||
+        instance.backendVersion !== adapter.version
+      ) {
         instance.available = adapter.available;
+        instance.backendVersion = adapter.version;
         changed = true;
       }
     }

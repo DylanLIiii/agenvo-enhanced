@@ -76,6 +76,8 @@ export class HerdrAdapter implements Adapter {
     let stopped = false;
     let socket: Socket | undefined;
     let retry: NodeJS.Timeout | undefined;
+    let retryDelay = 1000;
+    let lost = false;
     const serviceId = "default";
     const publish = (
       nativeType: string,
@@ -91,8 +93,20 @@ export class HerdrAdapter implements Adapter {
         native:
           bytes(native) < 24000 ? native : { omittedBytes: bytes(native) },
       });
+    const retryLater = () => {
+      if (!lost) {
+        lost = true;
+        publish("agenvo.resync_required", {
+          reason: "native_subscription_lost",
+        });
+      }
+      retry = setTimeout(() => void start(), retryDelay);
+      retryDelay = Math.min(30000, retryDelay * 2);
+      retry.unref();
+    };
     const start = async () => {
       if (stopped) return;
+      const version = this.version;
       try {
         await this.hello();
       } catch {
@@ -100,23 +114,21 @@ export class HerdrAdapter implements Adapter {
         if (this.available) {
           this.available = false;
           this.onAvailabilityChange?.();
-          publish("agenvo.resync_required", {
-            reason: "native_subscription_lost",
-          });
         }
-        retry = setTimeout(() => void start(), 1000);
-        retry.unref();
+        retryLater();
         return;
       }
       if (stopped) return;
+      if (!this.available || version !== this.version) {
+        this.available = true;
+        this.onAvailabilityChange?.();
+      }
       socket = subscribe(
         this.config.endpoint,
         (packet) => {
           if (packet.id === 1 && packet.result) {
-            if (!this.available) {
-              this.available = true;
-              this.onAvailabilityChange?.();
-            }
+            lost = false;
+            retryDelay = 1000;
             publish("agenvo.resync_required", {
               reason: "native_subscription_ready",
             });
@@ -134,15 +146,7 @@ export class HerdrAdapter implements Adapter {
         },
         () => {
           if (stopped) return;
-          if (this.available) {
-            this.available = false;
-            this.onAvailabilityChange?.();
-          }
-          publish("agenvo.resync_required", {
-            reason: "native_subscription_lost",
-          });
-          retry = setTimeout(start, 1000);
-          retry.unref();
+          retryLater();
         },
       );
     };
