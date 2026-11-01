@@ -12,13 +12,13 @@
 
 | 参数 | 含义 |
 | --- | --- |
-| `serviceId` | Herdr 原生 session 名称；Codex 为 `default` |
-| `threadId` | Herdr 原生 pane ID 或 Codex thread ID |
-| `nativeTypes` | 原生事件名称的精确匹配，例如 `pane.agent_status_changed`、`turn/completed` |
+| `serviceId` | Herdr Core 和 Codex 均为 `default` |
+| `threadId` | Herdr Core terminal 地址或 Codex thread ID |
+| `nativeTypes` | 原生事件名称的精确匹配，例如 `status`、`turn/completed` |
 
-使用原生 session 和 pane/thread ID 作为 serviceId、threadId。省略可选过滤条件即可订阅整个实例，包括之后发现的服务和已加载 thread。Codex 订阅会以 Agenvo 全权限设置 resume **已加载**的 thread，不自动加载归档或尚未加载的历史。每个 Codex 实例最多观察 128 个 thread，每个 Herdr 服务最多观察 512 个 pane。
+Herdr Core 使用 `default` 作为 serviceId、原生 terminal 地址作为 threadId。省略可选过滤条件即可订阅整个实例，包括之后发现的服务和已加载 thread。Codex 订阅会以 Agenvo 全权限设置 resume **已加载**的 thread，不自动加载归档或尚未加载的历史。每个 Codex 实例最多观察 128 个 thread。
 
-事件包含设备、实例、服务、可选 thread、后端代次、原生类型和原生数据。原生轮次结束可能表示完成、失败或中断；Herdr 的 `idle` / `done` 则是 Agent 可继续接受输入的有用证据。不推送逐 token 输出，使用 原生读取方法或 `notifications.list` 读取内容。
+事件包含设备、实例、服务、可选 thread、后端代次、原生类型和原生数据。原生轮次结束可能表示完成、失败或中断；Herdr Core 只报告程序主动提供的状态；没有状态表示未知，`idle` / `done` 不证明业务成功。不推送逐 token 输出，使用 原生读取方法或 `notifications.list` 读取内容。
 
 ## 恢复和投递
 

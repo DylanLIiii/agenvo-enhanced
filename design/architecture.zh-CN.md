@@ -44,7 +44,7 @@ VPS 只有一个进程持有数据库排他锁。状态目录属于运行用户�
 | Connector 连接 | `packages/connector/src/connection.ts`、`dispatch.ts`、`status.ts` | 连接独有的心跳与去重、跨重连的在途容量、串行状态落盘 |
 | Connector CLI | `packages/connector/src/cli/main.ts`、`connect.ts`、`configuration.ts`、`diagnostics.ts` | 命令分派、配对流程、配置与诊断；进程信号归 CLI |
 | VPS 宿主 | `apps/server/src/server.ts`、`host.ts`、`http.ts`、`store.ts` | 资源组合、套接字与定时器、HTTP 适配、数据库打开与权限 |
-| Herdr 原生边界 | `apps/herdr/src/methods.ts`、`services.ts`、`startups.ts`、`herdr.ts` | 方法 schema 与 argv、原生端点与 generation、异步启动确认、调用协调 |
+| Herdr 原生边界 | `apps/herdr/src/methods.ts`、`core-rpc.ts`、`herdr.ts` | 方法 schema、原生端点、JSON-RPC 调用与事件观察 |
 | Codex 原生边界 | `apps/codex-app-server/src/connection.ts`、`interactions.ts`、`native-schema.ts`、`codex.ts` | 单连接 RPC、待响应请求、原生校验、重连与订阅意图 |
 | Paseo / Lody 方法 | 各自的 `paseo.ts` / `lody.ts` | 方法定义从 schema 推导 handler 参数类型；原生状态仍由各自 SDK / workspace 持有 |
 | Amp / OpenCode 方法 | 各自的 `methods.ts` 与适配器 | 原生方法目录、插件桥接或 HTTP/SSE；不增加共同原生传输层 |
@@ -87,7 +87,7 @@ MCP 工具只暴露 `search({query, deviceId?, instanceId?})` 和 `execute({code
 
 传输帧正常上限 64 KiB，解析硬上限 1 MiB；实例和查询结果分页。全局在途请求最多 64、每设备 16；设备最多 32、实例最多 128。VPS OAuth 动态客户端注册和授权码数量有界。未批准的 OAuth 注册一小时后回收，已过期的 confidential client secret 对应注册自动清理。限制用于个人部署的资源保护，不承诺抵御大规模网络攻击。
 
-Herdr 适配器连接独立的原生服务，不提供 session.start/stop。原生 workspace、agent、pane 的操作属于用户已批准的运行时能力。Herdr 校验启动类型，Agenvo 原样转发 Agent 参数；调用者可根据实例 context 中声明的约定选择执行权限。Codex 适配器通过 Unix socket 或 loopback WebSocket 连接独立运行的 app-server，不负责原生进程的启动与停止。关闭、重启或更新 Connector 不停止原生服务及其轮次。Codex 当前在创建、恢复和输入时应用 full access，关闭沙箱与执行审批；原生权限请求自动回答。用户问题和动态工具调用仍需回答内容。
+Herdr 适配器连接独立的 Core，不提供服务启动或停止。原生 terminal 操作属于用户已批准的运行时能力，调用者可根据实例 context 选择原生执行参数。Codex 适配器通过 Unix socket 或 loopback WebSocket 连接独立运行的 app-server，不负责原生进程的启动与停止。关闭、重启或更新 Connector 不停止原生服务及其轮次。Codex 当前在创建、恢复和输入时应用 full access，关闭沙箱与执行审批；原生权限请求自动回答。用户问题和动态工具调用仍需回答内容。
 
 ## 发布与兼容边界
 

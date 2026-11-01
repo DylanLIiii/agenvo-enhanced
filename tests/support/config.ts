@@ -37,7 +37,7 @@ export const descriptor = (
         : config.kind === "paseo"
           ? "paseo-0.11.1-native-v1"
           : config.kind === "herdr"
-            ? "herdr-0.9.3-native-v1"
+            ? "herdr-core-0.1.15-native-v2"
             : config.kind === "amp"
               ? "amp-plugin-native-v1"
               : "codex-0.160.1-attach-native-v1",

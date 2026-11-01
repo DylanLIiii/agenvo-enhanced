@@ -14,7 +14,7 @@ Requirements:
 - macOS, Linux or Windows for connectors; Linux for a VPS relay.
 - The native runtime (Herdr, Codex CLI, Paseo, Amp or Lody) on the computers that will run agents, with the agents' provider credentials configured separately.
 
-CI pins Herdr 0.9.3, Codex CLI 0.160.1 and Paseo CLI 0.11.1 for reproducible tests. These are test baselines, not required exact versions; Agenvo does not reject a runtime just because its version differs. Compatibility depends on the native interfaces used by the connector.
+CI pins Herdr Core 0.1.15, Codex CLI 0.160.1 and Paseo CLI 0.11.1 for reproducible tests. These are test baselines, not required exact versions; Agenvo does not reject a runtime just because its version differs. Compatibility depends on the native interfaces used by the connector.
 
 Install only the packages needed on this machine. Connectors can coexist:
 
@@ -61,7 +61,7 @@ This makes `agenvo-herdr`, `agenvo-codex-app-server`, `agenvo-paseo`, `agenvo-am
 2. **Pair each connector:** follow [device setup](usage.md). Each Connector has separate commands, configuration directories, and credentials. All may run on the same computer.
    During setup, [add instance context](usage.md#add-instance-context) from the known environment and user requirements so remote Agents can read it during discovery.
 3. **Authorize the MCP client:** use [MCP authorization](usage.md#authorize-mcp-clients), or the [ChatGPT connection guide](chatgpt.md). The endpoint is `https://YOUR_RELAY/mcp`. Clients need OAuth and Streamable HTTP support; ChatGPT must allow custom MCP servers.
-4. **Check the connection:** use `search` to discover targets and method schemas, then use `execute` to call native `session.list` (Herdr) or `thread/list` (Codex). Check both connector availability and native service reachability before reporting that the environment is ready.
+4. **Check the connection:** use `search` to discover targets and method schemas, then use `execute` to call native `terminal.list` (Herdr) or `thread/list` (Codex). Check both connector availability and native service reachability before reporting that the environment is ready.
 
 Herdr and Codex app-server run independently; their Connectors only connect to existing services. Start Codex with a Unix socket or loopback WebSocket endpoint before configuring its Connector. A desktop App's stdio process does not automatically expose that endpoint or its conversations. Connector shutdown and updates leave native services running.
 

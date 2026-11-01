@@ -26,7 +26,7 @@ Agenvo 只提供 `search` 和 `execute` 两个 MCP 工具。search 接受关键�
 
 deviceId 标识一个 Connector，不是一台物理机器。离线或无法查询的实例仍返回状态或错误；方法查询失败可能留下部分结果。没有匹配方法的在线实例不出现在非空查询结果中。名称在实例内唯一，不添加 Agenvo 命名空间。
 
-两种 Connector 使用共同的操作词：list、create、read、submit input、interrupt、respond。work context 在 Codex 中是 conversation thread，在 Herdr 中是 terminal pane 内运行的 agent；Herdr session 指原生服务进程，workspace 指终端容器。原生方法名和字段名保留，不把不同对象强行等同。
+两种 Connector 使用共同的操作词：list、create、read、submit input、interrupt、respond。work context 在 Codex 中是 conversation thread，在 Herdr Core 中是运行 Agent 的 terminal；Herdr Core session 是独立运行的服务。原生方法名和字段名保留，不把不同对象强行等同。
 
 发现结果还会原样携带配置者提供的可选 `context` 自由文本。选择和使用实例时先阅读它；空查询、匹配方法的查询和离线实例均可包含最近通告。上下文不参与方法关键词匹配，不是实时能力或权限保证，也不会自动传入原生调用。配置方式见[实例上下文](usage.zh-CN.md#补充实例上下文)。
 
@@ -85,18 +85,16 @@ return r.result.data.map(thread => thread.id).join("\n");
 
 `execute` 不提供 `setTimeout`、`sleep` 等计时器，也不提供阻塞等待任务完成或未来输出的能力。提交输入后返回，由调用方 Agent 决定何时再次读取，并通过自身的等待机制或[事件协议](events.zh-CN.md)在 `execute` 之外等待。不要在脚本内忙等或轮询任务完成。30 秒时限用于保护脚本执行，不是等待任务的预算。
 
-例如，在一次 `execute` 中提交 Herdr 命令，使用发现的目标、session 和 paneId：
+例如，在一次 `execute` 中提交 Herdr 命令，使用发现的目标和 terminal 地址：
 
 ```js
-return await call(target, "pane.run", {...base, command: "echo hi"});
+return await call(target, "terminal.send", {terminal, text: "echo hi"});
 ```
 
-检查确认结果并在 Agent 一侧等待后，在另一次 `execute` 中读取输出。脚本变量不会跨调用保留，需要重新定义 `target` 和 `base`：
+检查确认结果并在 Agent 一侧等待后，在另一次 `execute` 中读取输出。脚本变量不会跨调用保留，需要重新定义 `target` 和 `terminal`：
 
 ```js
-return await call(target, "pane.read", {
-  ...base, lines: 20, source: "recent-unwrapped"
-});
+return await call(target, "terminal.read", {terminal, lines: 20});
 ```
 
 根据输出判断命令是否完成。输出尚未就绪时，在 `execute` 之外等待后再读取。如果脚本在提交输入后失败，先检查错误诊断附带的调用确认和原生状态，再决定是否重复提交。
@@ -109,41 +107,18 @@ return await call(target, "pane.read", {
 
 `requests.list({threadId?, cursor?})` 返回待回答问题和工具调用，包含原生参数与 responseSchema。可以在 execute 中筛选，再通过 `requests.respond({interactionId, result})` 回答。标识绑定当前连接，重复或过期回应失败。提交成功不证明你的回答赢得其他客户端的并发竞争。权限审批自动回答，不进入待回答列表。
 
-## Herdr
+## Herdr Core
 
-已知 session 时可以直接调用原生 workspace、pane、agent 方法；需要发现服务时使用 session.list。调用始终操作该 session 当前的原生目标，名称和 ID 可能在服务重启后复用；需要确认目标身份时，重新查询原生状态。服务独立运行，Agenvo 不启动或停止它。agent.list 包含外部启动的 Agent。原生 idle、done、unknown 都不代表业务成功，也不妨碍调用者继续检查终端。
+每个实例连接一个独立运行的 Core session。`terminal.list` 包含其他客户端创建的终端，以及该 Core 已连接机器上的终端；`box/t7` 等地址保留原生含义。`terminal.run` 在新终端启动程序或模板，按需传入 `argv`、`cwd`、`on` 和执行设置。模板可能发送首条消息，需检查 `first_message`。结果未知时先查询终端列表，再决定是否重试。
 
-通过 `workspace.create` 创建终端容器，或用 `tab.create` 在已有 pane 旁增加 shell pane；`tab.close` 关闭该 tab 及其中的终端。这些资源操作不启动 Agent。通过 `worktree.list`、`worktree.create`、`worktree.open` 和 `worktree.remove` 管理 Git worktree 工作区，包括 Herdr 之外创建的 worktree。删除保留分支，`force: true` 会丢弃未提交改动。worktree 方法接受默认 `false` 的 `trustRepository`，只为本次 Git 命令信任选定仓库，不修改 Git 配置。创建与打开不改变用户焦点。
+`terminal.send` 粘贴文本并回车；程序处于 blocked 时会拒绝，除非设置 `force`。回答前先检查问题。`terminal.keys` 发送原生按键，`terminal.interrupt` 发送停止键并报告观察结果；`terminal.kill` 停止程序，`terminal.rm` 删除已结束的记录。关闭 Connector 不会停止 Core 或终端。
 
-agent.start 需要已有 pane，返回 starting 与原生查询键。轮询 agent.get。启动确认超时不停止子进程；考虑再次启动前，先按 pane ID 重新发现。`kind` 由 Herdr 校验；Agenvo 原样转发 `args`，不注入或拒绝执行权限设置。配置者可以在实例 `context` 中声明启动约定，调用者据此选择原生参数。
-
-agent.prompt 和 agent.send-keys 使用原生 name 寻址，pane 输入使用 paneId。调用者可以按需查看当前 Agent 或终端，再决定发送什么输入。
-
-使用 agent.read 或 pane.read 读取；`lines` 默认为 `80`，`source` 默认为 `recent-unwrapped`。Agent 忙碌导致历史不可读时，显式选择 source: visible。输出是有界终端快照；检查当前界面后，可用原生文本和按键回答问题。不要把终端输出当成结构化请求标识或持久历史。
-
-### 筛选终端输出
-
-快照可能包含旧输出、空白行和 TUI 装饰。在 `execute` 内筛选或截取文本，让需要的结果进入 context。例如，使用已发现的 `target` 和包含 `session`、`paneId` 的 `base`，删除空白行以及完全由框线字符组成的行：
+`terminal.read` 返回 `text`、`complete`、`how` 和 `why`；`lines` 选择屏幕上方的历史行数。全屏应用工作时可能只能读取屏幕，快照不是持久会话记录。`terminal.get` 只报告程序通过 OSC 7501 主动发送的状态；没有报告的程序没有状态。idle 或 done 也不证明业务成功。使用[事件](events.zh-CN.md)选择读取时机，重同步后重新读取。
 
 ```js
-const read = await call(target, "pane.read", {
-  ...base, lines: 80, source: "recent-unwrapped"
-});
+const read = await call(target, "terminal.read", {terminal, lines: 80});
 if (read.error) return read;
-return read.result.output
-  .split("\n")
-  .filter(line => line.trim() && !/^[\s\u2500-\u257f]+$/.test(line))
-  .join("\n");
+return read.result.text;
 ```
-
-使用 `agent.read` 时，将 `base` 中的 `paneId` 换成 `name`。这个示例有损：它删除空白行和表格边框，但保留缩进、重复正文和包含文字的行。格式重要或需要检查原始快照时，使用 `return read.result.output`；筛选只改变当前脚本的返回值，不会腾出原生 `lines` 窗口的额度，也不能恢复窗口外的文本。
-
-也可以用自己输入中有辨识度的片段选取窗口。这只是启发式方法：重复输入或回复引用输入可能产生歧义，折叠、折行或滚出窗口的输入可能无法匹配。出现歧义或回退到末尾若干行时，应明确报告；匹配成功不证明回复完整，也不构成增量输出。
-
-只关心完成或需要输入的时刻时，可以用原生状态或事件决定何时读取。需要观察执行进展时，即使状态未变也应读取当前输出：`state_change_seq` 记录状态切换，不反映每次输出变化。根据所需上下文选择 `lines` 和 `source`，在两次读取之间于 `execute` 外等待。这两种策略都不保证取得快照之间产生的全部输出。
-
-Herdr 参数校验失败时返回 `invalid_params`，`error.message` 包含字段路径和原因。路径使用 JSON 数组，例如 `["lines"]`；`[]` 表示整个参数对象的错误，例如包含无法识别的字段。
-
-按变化触发观察时使用已有的[事件协议](events.zh-CN.md)，再通过 execute 读取当前状态和输出。
 
 Lody 通过 `lody.*` 方法暴露原生 Session、历史、精确轮次取消和交互。云端与本地连接边界见 [Lody 指南](lody.zh-CN.md)。

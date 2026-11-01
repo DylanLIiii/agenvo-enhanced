@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-连接独立运行的 Herdr。
+连接独立运行的 Herdr Core session。
 
 <!-- x-release-please-start-version -->
 

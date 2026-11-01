@@ -298,7 +298,10 @@ export async function eventsLab(
   const connect = async (instances: InstanceConfig[]) => {
     instances = await Promise.all(
       instances.map(async (c) =>
-        c.kind === "paseo" || c.kind === "lody" || c.kind === "opencode"
+        c.kind === "paseo" ||
+        c.kind === "lody" ||
+        c.kind === "opencode" ||
+        c.kind === "herdr"
           ? c
           : {
               ...c,
@@ -306,11 +309,7 @@ export async function eventsLab(
                 ? {}
                 : { binary: await realpath(c.binary) }),
               cwd: await realpath(c.cwd),
-              ...(c.kind === "herdr"
-                ? { configRoot: await realpath(c.configRoot) }
-                : c.kind === "codex"
-                  ? { home: await realpath(c.home) }
-                  : {}),
+              ...(c.kind === "codex" ? { home: await realpath(c.home) } : {}),
             },
       ),
     );

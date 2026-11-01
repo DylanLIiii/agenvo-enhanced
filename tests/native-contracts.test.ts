@@ -47,177 +47,6 @@ test("observations paginate with explicit eviction, truncation and reconnect gap
   );
 });
 
-test("Herdr delegates agent kinds and execution arguments to the native launcher", async (t) => {
-  const adapter = new HerdrAdapter({
-    kind: "herdr",
-    id: "test",
-    label: "Test",
-    binary: "/bin/herdr",
-    cwd: "/tmp",
-    configRoot: "/tmp/herdr",
-  });
-  const ref = { session: "test" };
-  t.mock.method(adapter, "generation", async () => "a".repeat(64));
-  const launches: string[][] = [];
-  const agents = new Set<string>();
-  t.mock.method(
-    adapter as any,
-    "execute",
-    async (_session: string, args: string[]) => {
-      if (args[1] === "start") {
-        launches.push(args);
-        agents.add(args[2]);
-      } else if (!agents.has(args[2])) {
-        throw new Fault("native_error", "Agent not found", "rejected", {
-          code: "agent_not_found",
-        });
-      }
-      return { result: { agent: { name: args[2] } } };
-    },
-  );
-  const method = adapter.methods().find((m) => m.name === "agent.start")!;
-  assert.equal((method.inputSchema as any).properties.kind.enum, undefined);
-  const cases = [
-    { kind: "pi" },
-    { kind: "cursor", args: ["--model", "fixture"] },
-    { kind: "future-native-agent", args: [] },
-    {
-      kind: "codex",
-      args: [
-        "--sandbox=read-only",
-        "--ask-for-approval",
-        "on-request",
-        "--",
-        "literal input",
-      ],
-    },
-    { kind: "claude", args: ["--settings", '{"sandbox":{"enabled":true}}'] },
-    { kind: "devin", args: ["--permission-mode", "safe"] },
-  ];
-  for (const [index, input] of cases.entries()) {
-    const name = `agent-${index}`;
-    const started = await adapter.call("agent.start", {
-      ...ref,
-      name,
-      paneId: "pane",
-      ...input,
-    });
-    assert.equal(started.execution, "starting");
-    assert.deepEqual(launches[index], [
-      "agent",
-      "start",
-      name,
-      "--kind",
-      input.kind,
-      "--pane",
-      "pane",
-      "--timeout",
-      "30000",
-      "--",
-      ...(input.args ?? []),
-    ]);
-    const settled = await until(
-      () => adapter.call("agent.get", { ...ref, name }),
-      (r) => (r.result as any)?.startup?.state === "settled",
-    );
-    assert.equal((settled.result as any).startup.outcome.execution, "accepted");
-    assert.equal((settled.result as any).result.agent.name, name);
-  }
-});
-
-test("native registry rejects duplicates and Herdr input directly uses the supplied native target", async (t) => {
-  const method = {
-    name: "native",
-    description: "",
-    readOnly: true,
-    inputSchema: {},
-  };
-  assert.throws(() => registered([method, method]), {
-    code: "duplicate_method",
-  });
-  const a = new HerdrAdapter({
-    kind: "herdr",
-    id: "test",
-    label: "Test",
-    binary: "/bin/herdr",
-    cwd: "/tmp",
-    configRoot: "/tmp/herdr",
-  });
-  const generation = "a".repeat(64);
-  t.mock.method(a, "generation", async () => generation);
-  const sent: string[][] = [];
-  t.mock.method(
-    a as any,
-    "execute",
-    async (_session: string, args: string[]) => {
-      sent.push(args);
-      return { result: {} };
-    },
-  );
-  const params = {
-    session: "test",
-    name: "agent",
-  };
-  for (const method of a.methods()) {
-    assert.equal(
-      (method.inputSchema as any).properties.backendGeneration,
-      undefined,
-      method.name,
-    );
-  }
-  const prompted = await a.call("agent.prompt", { ...params, text: "Work" });
-  assert.deepEqual(prompted.result, { result: {}, session: "test" });
-  await a.call("agent.send-keys", { ...params, keys: ["esc"] });
-  assert.deepEqual(
-    sent.map((args) => args.slice(0, 3)),
-    [
-      ["agent", "prompt", "agent"],
-      ["agent", "send-keys", "agent"],
-    ],
-  );
-});
-
-test("Herdr worktree trust is explicit and scoped to each native command", async (t) => {
-  const adapter = new HerdrAdapter({
-    kind: "herdr",
-    id: "test",
-    label: "Test",
-    binary: "/unused",
-    cwd: "/repo",
-    configRoot: "/tmp/herdr",
-  });
-  const generation = "a".repeat(64);
-  t.mock.method(adapter, "generation", async () => generation);
-  const sent: string[][] = [];
-  t.mock.method(
-    adapter as any,
-    "execute",
-    async (_session: string, args: string[]) => {
-      sent.push(args);
-      return { result: {} };
-    },
-  );
-  for (const [method, params] of [
-    ["worktree.list", {}],
-    ["worktree.create", { branch: "feature" }],
-    ["worktree.open", { branch: "feature" }],
-    ["worktree.remove", { workspaceId: "workspace" }],
-  ] as const) {
-    for (const trustRepository of [undefined, false, true]) {
-      await adapter.call(method, {
-        session: "test",
-        ...params,
-        trustRepository,
-      });
-      assert.equal(
-        sent.at(-1)!.includes("--trust-repository"),
-        trustRepository === true,
-        method,
-      );
-    }
-  }
-});
-
 test("native Codex preserves notifications, questions, permissions, errors and explicit turn identity", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "agenvo-native-contract-"));
   const server = await codexServer(root);
@@ -366,9 +195,7 @@ test("connectors use shared discovery terms while preserving native method names
     kind: "herdr",
     id: "h",
     label: "Herdr",
-    binary: "/unused",
-    cwd: "/tmp",
-    configRoot: "/tmp/herdr",
+    endpoint: "/tmp/herdr-core.sock",
   });
   const amp = new AmpAdapter({
     kind: "amp",
@@ -422,7 +249,7 @@ test("connectors use shared discovery terms while preserving native method names
     [
       "Create work context",
       "thread/start",
-      "agent.start",
+      "terminal.run",
       "amp.threads.create",
       "paseo.agents.create",
       "lody.sessions.create",
@@ -431,7 +258,7 @@ test("connectors use shared discovery terms while preserving native method names
     [
       "SUBMIT INPUT",
       "turn/start",
-      "agent.prompt",
+      "terminal.send",
       "amp.threads.send",
       "paseo.agents.send",
       "lody.sessions.send",
@@ -440,7 +267,7 @@ test("connectors use shared discovery terms while preserving native method names
     [
       "read output",
       "thread/read",
-      "agent.read",
+      "terminal.read",
       "amp.threads.read",
       "paseo.agents.history",
       "lody.sessions.history",
@@ -449,7 +276,7 @@ test("connectors use shared discovery terms while preserving native method names
     [
       "interrupt",
       "turn/interrupt",
-      "agent.send-keys",
+      "terminal.interrupt",
       "amp.threads.cancel",
       "paseo.agents.cancel",
       "lody.sessions.cancel",

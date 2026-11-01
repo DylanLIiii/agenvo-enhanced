@@ -28,11 +28,11 @@ npm run test:system
 npm run test:adapters
 ```
 
-安装器下载固定的 Herdr 0.9.3、Codex CLI 0.160.1、Paseo CLI 0.11.1 和 Amp CLI，校验 Herdr 发布资产摘要。固定版本用于复现测试，不是运行时版本白名单。Linux、macOS 和 Windows CI 使用相同命令。Windows 直接在 GitHub 托管的 Windows runner 上运行，使用 Herdr 命名管道和 Codex loopback WebSocket，不使用 WSL。`npm run test:ci` 将开头的检查（audit 除外）与系统测试合并。
+安装器下载固定的 Herdr Core 0.1.15、Codex CLI 0.160.1、Paseo CLI 0.11.1 和 Amp CLI，校验 Herdr 发布资产摘要。固定版本用于复现测试，不是运行时版本白名单。Linux、macOS 和 Windows CI 使用相同命令。Windows 直接在 GitHub 托管的 Windows runner 上运行，使用 Herdr 命名管道和 Codex loopback WebSocket，不使用 WSL。`npm run test:ci` 将开头的检查（audit 除外）与系统测试合并。
 
-系统测试覆盖 OAuth 登录 → 设备配对 → MCP 发现与订阅 → 输入任务 → 原生通知 → 读取输出 → 继续或中断 → 取消订阅。真实 Connector 和独立 Herdr/Codex/Paseo 进程使用本地模型 mock。测试入口清除继承凭证，提供临时 HOME、CODEX_HOME 和 Herdr 配置，fixture 负责清理进程。不要将测试指向个人部署。Codex Unix socket 测试仅在 macOS/Linux 运行，systemd 用户服务测试仅在 Linux 运行。Codex 生命周期测试在原生执行期间关闭并重启 Connector，恢复同一线程且不重放输入。检查跳过输出以确认平台专属覆盖。
+系统测试覆盖 OAuth 登录 → 设备配对 → MCP 发现与订阅 → 输入任务 → 原生通知 → 读取输出 → 继续或中断 → 取消订阅。真实 Connector 连接隔离的 Herdr Core、Codex 和 Paseo 进程；Codex 与 Paseo 使用本地模型 mock。测试入口清除继承凭证，提供临时 HOME、CODEX_HOME 和 Herdr 配置，fixture 负责清理进程。不要将测试指向个人部署。Codex Unix socket 测试仅在 macOS/Linux 运行，systemd 用户服务测试仅在 Linux 运行。Codex 生命周期测试在原生执行期间关闭并重启 Connector，恢复同一线程且不重放输入。检查跳过输出以确认平台专属覆盖。
 
-Herdr 会话测试通过公开 MCP 入口接入已有 Codex 或启动具名 Codex，提交输入，在原生轮次执行期间重启 Connector，读取回复并继续同一对话。验收检查实际送达的用户输入、保留的对话历史、每轮不同的回复和没有重放输入，不能只断言调用被接受或 Agent 空闲。另用受控的原生启动延迟验证启动超时后的恢复。模型回复是确定的：这些测试验证会话控制和传输，不验证模型推理质量或线上模型服务的账号认证。进程清理属于测试夹具职责，不能代替用户流程验收。每个 fixture 停止自己创建的原生进程；测试启动器在隔离测试进程退出后统一删除目录，让 Windows 原生库和工作目录句柄有明确的生命周期。最终目录清理失败仍会使测试失败。
+Herdr Core 系统测试通过真实 MCP 接入外部终端和创建新终端，验证输入、阻塞问题、状态事件以及 Core 和 Connector 重启后的持续交互。夹具使用隔离状态和自定义 OSC 7501 程序，不使用个人会话。
 
 本地 webhook 接收端用测试密钥验证签名，测试专用地址映射让请求通过生产 HTTP 传输到达接收端。workerd 测试覆盖 Durable Object 存储和 alarm。这些测试不证明 ChatGPT UI 发现或实际 dot 唤醒；两者仍是独立的发布验收范围。
 

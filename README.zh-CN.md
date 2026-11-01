@@ -18,7 +18,7 @@
 
 - **离开电脑，工作继续推进。** 助手能直接看到 Herdr 里已在运行的 Agent，无需重启；Codex 会话也能稍后恢复。在手机上就能查看进展或回复。
 - **有变化时自动跟进。** 让 [ChatGPT dot](https://learn.chatgpt.com/docs/dots) 盯住某台电脑上的 Agent，并告诉它该怎么应对。Agent 完成一轮、等待输入或退出时，dot 会收到事件，读取输出，再推进下一步。
-- **一个助手协调多台电脑。** 笔记本上的 Herdr 和服务器上的 Codex 出现在同一个列表里。助手可以把新工作放到合适的位置：在服务器上新建 Codex 会话，或在 Herdr 窗格中启动 Codex、Claude 或 Devin。
+- **一个助手协调多台电脑。** 笔记本上的 Herdr 和服务器上的 Codex 出现在同一个列表里。助手可以把新工作放到合适的位置：在服务器上新建 Codex 会话，或在 Herdr Core 终端中启动 Codex、Claude 或 Devin。
 - **连接中断，Agent 照常工作。** 关掉对话或断网都不会让 Agent 停下。连接器会自动重连，助手再从每个 Agent 的当前状态接着处理。
 
 ## 安装

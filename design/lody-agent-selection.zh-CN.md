@@ -39,7 +39,7 @@ if (!modeId) throw new Fault("unsupported_capability",
 - `catalog` 本身不过滤：它返回所有配置的 `id/name/cliType/agentType` 与原始 `acpCapability`，所以“可发现”已成立；调用者看不到的是“Agenvo 是否会执行”。
 - 测试只覆盖 Codex：`tests/fixtures/lody-cloud.ts` 与 `tests/system/lody-events.test.ts` 的 agentConfig 均为 `builtin/codex`。Claude 路径只有闸门代码，没有系统级验证。
 
-Paseo 有相同形态的闸门（[paseo.ts:24,57](../apps/paseo/src/paseo.ts#L24) 的 `provider: codex|claude`）；本文不处理，只供对照。Herdr 则明确不设白名单（`kind` 与 `args` 原样转发，见 [Herdr 设计](herdr-connector.zh-CN.md)），OpenCode 与 Codex app-server 在服务端内部设置全允许策略。
+Paseo 有相同形态的闸门（[paseo.ts:24,57](../apps/paseo/src/paseo.ts#L24) 的 `provider: codex|claude`）；本文不处理，只供对照。Herdr Core 不设 Agent 白名单（`terminal.run` 的 `argv` 原样转发，见 [Herdr 设计](herdr-connector.zh-CN.md)），OpenCode 与 Codex app-server 在服务端内部设置全允许策略。
 
 ## Lody 原生 Agent 配置版图
 
