@@ -14,4 +14,9 @@ export interface Backend<T extends InstanceConfig> {
   create(config: T): Promise<Adapter>;
   revision(config: T): string;
   doctor(config: T): Promise<Check[]>;
+  /** Backend-specific `instance <command> --id ID` actions on a configured instance. */
+  instanceCommands?: Record<
+    string,
+    (config: T, options: Options, dir: string) => Promise<unknown>
+  >;
 }

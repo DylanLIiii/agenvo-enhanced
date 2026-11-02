@@ -9,6 +9,7 @@
 | Paseo | [客户端选择、原生能力与订阅语义](paseo-connector.zh-CN.md) |
 | Amp | [插件宿主、原生接口与验证边界](amp-interface-audit.zh-CN.md) |
 | OpenCode | [HTTP 原生操作、跨项目会话与全局事件](opencode-connector.zh-CN.md) |
+| T3 Code | [原生 MCP 编排工具、外部 Agent 登录与暴露范围](t3code-connector.zh-CN.md) |
 | Lody | [云端与本地连接、Session 与交互](lody-connector.zh-CN.md) |
 
 接口版本用于复现和追溯，不作为运行时版本白名单。升级时核对原生来源，并通过对应 Connector 的隔离测试验证实际调用路径；字段或方法存在不等于具备去重、重放或完整历史保证。

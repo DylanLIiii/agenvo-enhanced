@@ -28,7 +28,7 @@ npm run test:system
 npm run test:adapters
 ```
 
-The installer downloads pinned Herdr Core 0.1.15, Codex CLI 0.160.1, Paseo CLI 0.11.1, and Amp CLI releases and checks the Herdr asset digest. These pins make tests reproducible; they are not a runtime version allowlist. Linux, macOS and Windows CI use the same commands. Windows runs directly on a GitHub-hosted Windows runner with Herdr named pipes and Codex loopback WebSocket, without WSL. `npm run test:ci` combines the initial checks (except audit) with system tests.
+The installer downloads pinned Herdr Core 0.1.15, Codex CLI 0.160.1, Paseo CLI 0.11.1, Amp CLI, and T3 Code 0.1.6 releases and checks the Herdr asset digest. Set both `PATH` and `AGENVO_T3CODE_HOME` as printed by the installer. These pins make tests reproducible; they are not a runtime version allowlist. Linux, macOS and Windows CI use the same commands. Windows runs directly on a GitHub-hosted Windows runner with Herdr named pipes and Codex loopback WebSocket, without WSL. `npm run test:ci` combines the initial checks (except audit) with system tests.
 
 System tests follow OAuth login → device pairing → MCP discovery/subscription → Agent input → native notification → reading output → follow-up/interruption → unsubscribe. Real Connectors attach isolated Herdr Core, Codex and Paseo processes; Codex and Paseo use a local model mock. The launcher clears inherited credentials and provides temporary HOME, CODEX_HOME and Herdr configuration; fixtures clean up their processes. Never point tests at a personal deployment. Codex Unix socket tests run only on macOS/Linux; systemd user-service tests run only on Linux. Codex lifecycle tests close and restart the Connector during native execution, then recover the same thread without replaying input. Check skipped-test output for platform-specific coverage.
 
@@ -45,7 +45,7 @@ Source responsibilities:
 - `packages/protocol`: wire schemas, limits and execution outcomes.
 - `packages/relay`: shared Relay, MCP, event delivery and administration UI.
 - `packages/connector`: shared connection, configuration storage, observation and CLI mechanisms.
-- `apps/herdr`, `apps/codex-app-server`, `apps/paseo`, `apps/amp`, `apps/lody`, `apps/opencode`: independently installed Connectors owning their configuration schemas and adapters.
+- `apps/herdr`, `apps/codex-app-server`, `apps/paseo`, `apps/amp`, `apps/lody`, `apps/opencode`, `apps/t3code`: independently installed Connectors owning their configuration schemas and adapters.
 - `apps/server`, `apps/cloudflare`: VPS and Cloudflare hosts.
 
 New deployment hosts must reuse the routing core and preserve authorization, epoch and uncertain-execution semantics. Native adapter additions follow the [Connector contract (Chinese)](design/agent-management.zh-CN.md#新增或扩展-connector): expose discoverable native methods through the existing `search` and `execute` tools, with shared operation terms and explicit interaction semantics. Do not add retry mechanisms that can duplicate writes.
@@ -67,3 +67,5 @@ Lody local system tests use pinned `lody@0.104.0` native daemon/ACP, Codex 0.160
 Use Conventional Commit PR titles (`fix:`, `feat:`, or `feat!:` for incompatible changes). Squash merges use the title to determine the next release. Release Please maintains one version PR for all workspaces; follow [Releasing](RELEASING.md).
 
 OpenCode system tests use the installer-pinned `opencode-ai@1.18.35`, isolated native state and a local model. They cover external sessions across projects, real MCP calls, events, active execution surviving Connector restart, interruption and continuation. No personal credentials or production providers are used.
+
+T3 Code tests use a protocol fixture for the native outside-agent OAuth and MCP surface in `npm test` and `npm run test:integration`. `tests/system/t3code-threads.test.ts` starts an isolated T3 Code environment (`t3` 0.1.6 in PATH, runtime cached in the test-only directory set by `AGENVO_T3CODE_HOME`) with its Codex provider pointed at a local model, signs in with a pairing code, and drives a real thread through Relay MCP and a Connector restart. It skips when `t3` or `codex` is absent.

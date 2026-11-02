@@ -59,6 +59,11 @@ test("free-form instance context survives discovery without changing the approve
       endpoint: "ws://127.0.0.1:4500",
     },
     { kind: "opencode", endpoint: "http://127.0.0.1:4096" },
+    {
+      kind: "t3code",
+      endpoint: "https://t3.example/mcp",
+      tokenFile: "/config/t3code/tokens/t3.json",
+    },
     { kind: "paseo", endpoint: "ws://127.0.0.1:6767/ws", serverId: "daemon" },
     {
       kind: "amp",

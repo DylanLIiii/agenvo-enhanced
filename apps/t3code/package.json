@@ -1,0 +1,42 @@
+{
+  "name": "@agenvo/t3code",
+  "version": "0.2.0",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Xuanwo/agenvo.git",
+    "directory": "apps/t3code"
+  },
+  "engines": {
+    "node": ">=24.13.0"
+  },
+  "devDependencies": {
+    "@agenvo/connector": "0.2.0",
+    "@agenvo/protocol": "0.2.0",
+    "zod": "4.6.5"
+  },
+  "description": "T3 Code MCP connector for Agenvo",
+  "bin": {
+    "agenvo-t3code": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "node ../../scripts/build.mjs t3code",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "pino": "10.4.0",
+    "ws": "8.22.0"
+  }
+}

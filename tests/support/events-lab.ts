@@ -301,6 +301,7 @@ export async function eventsLab(
         c.kind === "paseo" ||
         c.kind === "lody" ||
         c.kind === "opencode" ||
+        c.kind === "t3code" ||
         c.kind === "herdr"
           ? c
           : {
