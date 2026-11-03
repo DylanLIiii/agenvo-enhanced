@@ -1,4 +1,5 @@
 import { OpenCodeAdapter } from "../apps/opencode/src/opencode.js";
+import { methodsFrom } from "../apps/t3code/src/methods.js";
 import { codexServer } from "./support/codex-server.js";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -183,6 +184,20 @@ test("large native notifications retain identity and completion status", async (
 });
 
 test("connectors use shared discovery terms while preserving native method names", () => {
+  // T3 Code reads its catalog from the native tools/list at connection time.
+  const t3code = {
+    config: { kind: "t3code", id: "t", label: "T3 Code" },
+    methods: () =>
+      methodsFrom(
+        [
+          "t3_thread_launch",
+          "t3_thread_send",
+          "t3_thread_read",
+          "t3_thread_interrupt",
+          "preview_open",
+        ].map((name) => ({ name, inputSchema: { type: "object" } })),
+      ),
+  } as unknown as Adapter;
   const codex = new CodexAdapter({
     kind: "codex",
     id: "c",
@@ -231,7 +246,7 @@ test("connectors use shared discovery terms while preserving native method names
     endpoint: "http://localhost:1",
     username: "opencode",
   });
-  for (const adapter of [codex, herdr, amp, paseo, lody, opencode])
+  for (const adapter of [codex, herdr, amp, paseo, lody, opencode, t3code])
     assert.ok(
       adapter.methods().every((m) => !m.name.startsWith("management.")),
     );
@@ -245,7 +260,7 @@ test("connectors use shared discovery terms while preserving native method names
     } while (cursor);
     return found;
   };
-  for (const [query, c, h, a, p, l, o] of [
+  for (const [query, c, h, a, p, l, o, t3] of [
     [
       "Create work context",
       "thread/start",
@@ -254,6 +269,7 @@ test("connectors use shared discovery terms while preserving native method names
       "paseo.agents.create",
       "lody.sessions.create",
       "session.create",
+      "t3_thread_launch",
     ],
     [
       "SUBMIT INPUT",
@@ -263,6 +279,7 @@ test("connectors use shared discovery terms while preserving native method names
       "paseo.agents.send",
       "lody.sessions.send",
       "session.prompt_async",
+      "t3_thread_send",
     ],
     [
       "read output",
@@ -272,6 +289,7 @@ test("connectors use shared discovery terms while preserving native method names
       "paseo.agents.history",
       "lody.sessions.history",
       "session.messages",
+      "t3_thread_read",
     ],
     [
       "interrupt",
@@ -281,6 +299,7 @@ test("connectors use shared discovery terms while preserving native method names
       "paseo.agents.cancel",
       "lody.sessions.cancel",
       "session.abort",
+      "t3_thread_interrupt",
     ],
   ]) {
     assert.ok(
@@ -307,6 +326,10 @@ test("connectors use shared discovery terms while preserving native method names
       all(lody, query).some((m) => m.name === l),
       query,
     );
+    assert.ok(
+      all(t3code, query).some((m) => m.name === t3),
+      query,
+    );
   }
   const exact = all(codex, "THREAD/START");
   assert.deepEqual(
@@ -316,4 +339,5 @@ test("connectors use shared discovery terms while preserving native method names
   assert.ok(exact[0].inputSchema);
   assert.deepEqual(all(herdr, "no-such-method"), []);
   assert.equal(all(herdr, "herdr").length, herdr.methods().length);
+  assert.deepEqual(all(t3code, "preview"), []);
 });

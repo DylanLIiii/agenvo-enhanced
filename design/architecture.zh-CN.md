@@ -23,6 +23,7 @@ flowchart TB
   CON --> AMP["Amp 适配器 · 原生插件桥接"]
   CON --> LODY["Lody 适配器 · 云端 / 本机连接"]
   CON --> OPENCODE["OpenCode 适配器 · HTTP / SSE"]
+  CON --> T3CODE["T3 Code 适配器 · 原生 MCP"]
 ```
 
 `packages/relay/src/access.ts` 维护设备配对、实例指纹批准、grant 与持久授权状态。`core.ts` 维护连接 epoch、并发限制、请求关联和结果交付，协调撤销授权后的事件清理与在途调用失效。核心不依赖 Cloudflare 或 Node API。`packages/relay/src/admin.ts` 共用管理端点的校验、撤销与错误语义；未知撤销目标返回 404，不报告成功。存储事务必须同步执行，不在事务内等待网络。
@@ -48,6 +49,7 @@ VPS 只有一个进程持有数据库排他锁。状态目录属于运行用户�
 | Codex 原生边界 | `apps/codex-app-server/src/connection.ts`、`interactions.ts`、`native-schema.ts`、`codex.ts` | 单连接 RPC、待响应请求、原生校验、重连与订阅意图 |
 | Paseo / Lody 方法 | 各自的 `paseo.ts` / `lody.ts` | 方法定义从 schema 推导 handler 参数类型；原生状态仍由各自 SDK / workspace 持有 |
 | Amp / OpenCode 方法 | 各自的 `methods.ts` 与适配器 | 原生方法目录、插件桥接或 HTTP/SSE；不增加共同原生传输层 |
+| T3 Code 方法 | `apps/t3code/src/methods.ts`、`t3code.ts`、`login.ts` | 原生 MCP 工具筛选、MCP 会话与外部 Agent OAuth 令牌；线程状态由 T3 Code 持有 |
 
 重连只重建连接和允许恢复的观察，不重放业务输入。Connector 在途容量由每次调用独立持有，重复 requestId 或新连接上的同名 requestId 不能释放其他调用的容量。关闭连接不会终止附着的原生服务。
 
@@ -101,7 +103,7 @@ Herdr 适配器连接独立的 Core，不提供服务启动或停止。原生 te
 
 ## 包与发行边界
 
-仓库使用 npm workspaces。统一发行七个程序：`@agenvo/herdr`、`@agenvo/codex-app-server`、`@agenvo/paseo`、`@agenvo/amp`、`@agenvo/lody`、`@agenvo/opencode`、`@agenvo/server`。`@agenvo/protocol`、`@agenvo/connector`、`@agenvo/relay` 是私有 workspace 包，构建时进入对应发行产物，不要求使用者安装私有包。Cloudflare 是部署入口，不发布 npm 包。各包统一版本，线协议版本独立维护。
+仓库使用 npm workspaces。统一发行八个程序：`@agenvo/herdr`、`@agenvo/codex-app-server`、`@agenvo/paseo`、`@agenvo/amp`、`@agenvo/lody`、`@agenvo/opencode`、`@agenvo/t3code`、`@agenvo/server`。`@agenvo/protocol`、`@agenvo/connector`、`@agenvo/relay` 是私有 workspace 包，构建时进入对应发行产物，不要求使用者安装私有包。Cloudflare 是部署入口，不发布 npm 包。各包统一版本，线协议版本独立维护。
 
 共享 Connector 不导入后端实现。每个后端拥有配置 schema、配置生成、能力版本、诊断、原生连接及生命周期行为，通过静态 Backend 接口接入共同 CLI 和连接循环。不存在动态插件注册或加载。
 
@@ -114,3 +116,5 @@ Paseo Connector 附着已有 daemon，默认配置目录为 `~/.config/agenvo/pa
 Amp 实验性连接器通过本地鉴权 WebSocket 接收原生插件连接。每个插件宿主是独立 service，任务和历史由 Amp 持有。实现边界和证据见 [Amp 原生接口依据](amp-interface-audit.zh-CN.md)。
 
 Lody Connector 连接云端 workspace 或附着本机 daemon，执行机器由 Lody 管理。认证、同步、RPC 和验收边界见 [Lody 接入设计](lody-connector.zh-CN.md)。
+
+T3 Code Connector 以外部 Agent 身份登录环境的原生 MCP 服务，只暴露编排工具。登录、暴露范围和验证边界见 [T3 Code 接入设计](t3code-connector.zh-CN.md)。

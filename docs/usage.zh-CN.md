@@ -65,6 +65,10 @@ agenvo-paseo run
 
 使用 `agenvo-opencode` 连接已有 OpenCode HTTP 服务，跨项目管理原生会话。配置与操作见 [OpenCode 指南](opencode.zh-CN.md)。
 
+## T3 Code
+
+使用 `agenvo-t3code` 通过原生 MCP 服务登录正在运行的 T3 Code 环境，编排其项目和线程。配置与操作见 [T3 Code 指南](t3code.zh-CN.md)。
+
 ## Lody
 
 使用 `agenvo-lody` 连接已授权的云端 workspace 或已有本机 daemon；配置、凭据和行为边界见 [Lody 指南](lody.zh-CN.md)。

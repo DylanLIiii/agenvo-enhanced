@@ -28,6 +28,9 @@ try {
       env: {
         PATH: process.env.PATH,
         AGENVO_TEST_ROOT: root,
+        ...(process.env.AGENVO_T3CODE_HOME
+          ? { AGENVO_T3CODE_HOME: process.env.AGENVO_T3CODE_HOME }
+          : {}),
         ...(process.platform === "win32"
           ? {
               SystemRoot: process.env.SystemRoot,

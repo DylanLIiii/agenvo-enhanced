@@ -66,10 +66,42 @@ await execa(
     "@ampcode/cli@0.0.1791446565-g95411c",
     "lody@0.104.0",
     "opencode-ai@1.18.35",
+    "t3@0.1.6",
   ],
   { maxBuffer: 1024 * 1024 },
 );
+// The T3 launcher downloads and verifies its native runtime on first use.
+// Warm a test-only cache here so the bounded system suite does not download
+// it separately, and never needs the operator's T3 data directory.
+const t3Home = join(root, "t3-runtime");
+await mkdir(t3Home, { recursive: true });
+const t3Env = {
+  PATH: process.env.PATH,
+  HOME: t3Home,
+  T3CODE_HOME: t3Home,
+  ...(process.platform === "win32"
+    ? {
+        SystemRoot: process.env.SystemRoot,
+        WINDIR: process.env.WINDIR,
+        COMSPEC: process.env.COMSPEC,
+        PATHEXT: process.env.PATHEXT,
+        USERPROFILE: t3Home,
+        TEMP: t3Home,
+        TMP: t3Home,
+      }
+    : {}),
+};
+const t3Version = await execa(
+  process.execPath,
+  [join(root, "node_modules", "t3", "bin", "t3.mjs"), "--version"],
+  { env: t3Env, extendEnv: false },
+);
+if (!/^t3 v0\.1\.6\b/.test(t3Version.stdout))
+  throw new Error(`Unexpected T3 Code test version: ${t3Version.stdout}`);
 const paths = [bin, join(root, "node_modules", ".bin")];
 if (process.env.GITHUB_PATH)
   await appendFile(process.env.GITHUB_PATH, paths.join("\n") + "\n");
+if (process.env.GITHUB_ENV)
+  await appendFile(process.env.GITHUB_ENV, `AGENVO_T3CODE_HOME=${t3Home}\n`);
 console.log(`Add to PATH: ${paths.join(delimiter)}`);
+console.log(`Set AGENVO_T3CODE_HOME=${t3Home} for system tests`);

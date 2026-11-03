@@ -1,4 +1,5 @@
 import { opencodeFixture } from "../fixtures/opencode-server.js";
+import { t3codeFixture } from "../fixtures/t3code-server.js";
 import { releasePackages } from "../../scripts/release-packages.ts";
 import { codexServer } from "../support/codex-server.js";
 import { assertPublicBrand } from "../support/brand.js";
@@ -178,6 +179,72 @@ test(
       env: isolatedEnvironment(root),
     });
     assert.match(doctor.stdout, /HTTP and global events connected/);
+
+    const t3code = await t3codeFixture();
+    cleanups.push(t3code.close);
+    const t3codeCli = installed.get("t3code")!;
+    const signIn = exec(
+      process.execPath,
+      [
+        t3codeCli,
+        "instance",
+        "add",
+        "--id",
+        "t3",
+        "--endpoint",
+        t3code.endpoint,
+        "--no-browser",
+      ],
+      { cwd: root, env: isolatedEnvironment(root), timeout: 30000 },
+    );
+    let prompt = "";
+    let approving = false;
+    const approval = new Promise<void>((resolve, reject) => {
+      signIn.stderr!.on("data", (chunk) => {
+        prompt += chunk;
+        // Wait for the complete printed line before approving; a stream chunk
+        // can end in the middle of the authorization URL.
+        const url = /^(http\S+\/oauth\/mcp\/authorize\S+)\r?\n/m.exec(
+          prompt,
+        )?.[1];
+        if (!url || approving) return;
+        approving = true;
+        // The fixture stands in for the owner approving on T3 Code's page.
+        void fetch(url)
+          .then((response) => {
+            if (!response.ok)
+              throw new Error(`Fixture approval returned ${response.status}`);
+            resolve();
+          })
+          .catch(reject);
+      });
+      signIn.once("error", reject);
+      signIn.once("exit", () => {
+        if (!approving) reject(new Error(`No authorization URL: ${prompt}`));
+      });
+    });
+    try {
+      await Promise.all([signIn, approval]);
+    } finally {
+      if (signIn.exitCode === null && signIn.signalCode === null) signIn.kill();
+    }
+    const t3codeConfig = JSON.parse(
+      await readFile(
+        join(root, ".config", "agenvo", "t3code", "config.json"),
+        "utf8",
+      ),
+    );
+    assert.equal(t3codeConfig.instances[0].endpoint, t3code.endpoint);
+    assert.equal(t3codeConfig.instances[0].accessToken, undefined);
+    assert.match(
+      (
+        await exec(process.execPath, [t3codeCli, "doctor"], {
+          cwd: root,
+          env: isolatedEnvironment(root),
+        })
+      ).stdout,
+      /MCP connected, \d+ orchestration tools/,
+    );
 
     const paseo = await paseoFixture();
     cleanups.push(() => paseo.close());

@@ -65,6 +65,10 @@ Discovery includes agents created by other clients. Creating an agent sends no p
 
 Use `agenvo-opencode` to attach an existing OpenCode HTTP service and manage native sessions across projects. See the [OpenCode guide](opencode.md).
 
+## T3 Code
+
+Use `agenvo-t3code` to sign in to a running T3 Code environment through its native MCP server and orchestrate its projects and threads. See the [T3 Code guide](t3code.md).
+
 ## Lody
 
 Use `agenvo-lody` for an authorized cloud workspace or an existing local daemon; see the [Lody guide](lody.md) for configuration, credentials and behavior.

@@ -106,6 +106,23 @@ export async function connectorCli<T extends InstanceConfig>(
       });
       return;
     }
+    if (
+      command === "instance" &&
+      subcommand &&
+      backend.instanceCommands &&
+      Object.hasOwn(backend.instanceCommands, subcommand)
+    ) {
+      const c = await loadConfig(dir, backend.schema);
+      const instance = c.instances.find((i) => i.id === options.id);
+      if (!instance || kind)
+        throw new Fault(
+          "invalid_arguments",
+          `Use instance ${subcommand} --id ID with a configured instance`,
+        );
+      return output(
+        await backend.instanceCommands[subcommand](instance, options, dir),
+      );
+    }
     if (command === "connect")
       return connectCommand(backend, dir, subcommand, options, output);
     if (command === "service") {
